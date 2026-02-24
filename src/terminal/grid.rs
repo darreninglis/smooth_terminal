@@ -1,0 +1,200 @@
+use super::cell::{Cell, CellAttributes};
+
+#[derive(Debug, Clone)]
+pub struct TerminalGrid {
+    pub cols: usize,
+    pub rows: usize,
+    pub cells: Vec<Vec<Cell>>,
+    pub cursor_col: usize,
+    pub cursor_row: usize,
+    pub scroll_top: usize,
+    pub scroll_bottom: usize,
+    pub scrollback: Vec<Vec<Cell>>,
+    pub scrollback_limit: usize,
+    pub current_attrs: CellAttributes,
+    pub title: String,
+    /// Pending line wrap: next char goes to start of next line
+    pub pending_wrap: bool,
+    /// Incremented on every visible cell change.  The renderer compares this
+    /// against a cached value to decide whether to rebuild SpanBuffers.
+    pub generation: u64,
+}
+
+impl TerminalGrid {
+    pub fn new(cols: usize, rows: usize) -> Self {
+        let cells = vec![vec![Cell::default(); cols]; rows];
+        Self {
+            cols,
+            rows,
+            cells,
+            cursor_col: 0,
+            cursor_row: 0,
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
+            scrollback: Vec::new(),
+            scrollback_limit: 10000,
+            current_attrs: CellAttributes::default(),
+            title: String::new(),
+            pending_wrap: false,
+            generation: 0,
+        }
+    }
+
+    pub fn resize(&mut self, cols: usize, rows: usize) {
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let mut new_cells = vec![vec![Cell::default(); cols]; rows];
+        let copy_rows = self.rows.min(rows);
+        let copy_cols = self.cols.min(cols);
+        for r in 0..copy_rows {
+            for c in 0..copy_cols {
+                new_cells[r][c] = self.cells[r][c].clone();
+            }
+        }
+        self.cols = cols;
+        self.rows = rows;
+        self.cells = new_cells;
+        self.cursor_col = self.cursor_col.min(cols.saturating_sub(1));
+        self.cursor_row = self.cursor_row.min(rows.saturating_sub(1));
+        self.scroll_top = 0;
+        self.scroll_bottom = rows.saturating_sub(1);
+        self.pending_wrap = false;
+    }
+
+    pub fn set_cell(&mut self, col: usize, row: usize, ch: char) {
+        if row < self.rows && col < self.cols {
+            self.cells[row][col] = Cell::new(ch, self.current_attrs);
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    pub fn clear_line(&mut self, row: usize) {
+        if row < self.rows {
+            for c in 0..self.cols {
+                self.cells[row][c] = Cell::default();
+            }
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    pub fn clear_line_range(&mut self, row: usize, col_start: usize, col_end: usize) {
+        if row < self.rows {
+            let end = col_end.min(self.cols);
+            for c in col_start..end {
+                self.cells[row][c] = Cell::default();
+            }
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    pub fn clear_screen(&mut self) {
+        for row in 0..self.rows {
+            self.clear_line(row);
+        }
+        self.cursor_col = 0;
+        self.cursor_row = 0;
+        self.pending_wrap = false;
+    }
+
+    /// Scroll up region [scroll_top..=scroll_bottom] by `count` lines
+    pub fn scroll_up_region(&mut self, count: usize) {
+        self.generation = self.generation.wrapping_add(1);
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom.min(self.rows - 1);
+        if top >= bottom {
+            return;
+        }
+        let region_height = bottom - top + 1;
+        let count = count.min(region_height);
+
+        // Move scrolled-out rows to scrollback
+        for i in 0..count {
+            let row_idx = top + i;
+            if row_idx < self.rows {
+                let row = self.cells[row_idx].clone();
+                self.scrollback.push(row);
+                if self.scrollback.len() > self.scrollback_limit {
+                    self.scrollback.remove(0);
+                }
+            }
+        }
+
+        // Shift rows up
+        for r in top..(bottom + 1 - count) {
+            let src = r + count;
+            if src <= bottom && src < self.rows {
+                self.cells[r] = self.cells[src].clone();
+            }
+        }
+        // Clear newly exposed rows at bottom
+        for r in (bottom + 1 - count)..(bottom + 1) {
+            if r < self.rows {
+                self.clear_line(r);
+            }
+        }
+    }
+
+    /// Scroll down region [scroll_top..=scroll_bottom] by `count` lines
+    pub fn scroll_down_region(&mut self, count: usize) {
+        self.generation = self.generation.wrapping_add(1);
+        let top = self.scroll_top;
+        let bottom = self.scroll_bottom.min(self.rows - 1);
+        if top >= bottom {
+            return;
+        }
+        let region_height = bottom - top + 1;
+        let count = count.min(region_height);
+
+        for r in (top..bottom + 1).rev() {
+            let dst = r;
+            let src = r.wrapping_sub(count);
+            if src >= top && src <= bottom && dst < self.rows {
+                self.cells[dst] = self.cells[src].clone();
+            } else if dst >= top && dst < top + count && dst < self.rows {
+                self.clear_line(dst);
+            }
+        }
+        // Clear top rows
+        for r in top..(top + count).min(bottom + 1) {
+            if r < self.rows {
+                self.clear_line(r);
+            }
+        }
+    }
+
+    pub fn newline(&mut self) {
+        self.pending_wrap = false;
+        if self.cursor_row == self.scroll_bottom {
+            self.scroll_up_region(1);
+        } else if self.cursor_row < self.rows - 1 {
+            self.cursor_row += 1;
+        }
+    }
+
+    pub fn carriage_return(&mut self) {
+        self.cursor_col = 0;
+        self.pending_wrap = false;
+    }
+
+    pub fn advance_cursor(&mut self) {
+        self.advance_cursor_by_width(1);
+    }
+
+    /// Advance the cursor by `width` columns (1 for normal chars, 2 for wide chars).
+    pub fn advance_cursor_by_width(&mut self, width: usize) {
+        let next_col = self.cursor_col + width;
+        if next_col < self.cols {
+            self.cursor_col = next_col;
+            self.pending_wrap = false;
+        } else {
+            // At or past right edge — set pending wrap flag
+            self.pending_wrap = true;
+        }
+    }
+
+    pub fn total_rows(&self) -> usize {
+        self.scrollback.len() + self.rows
+    }
+}

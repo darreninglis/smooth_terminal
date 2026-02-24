@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target/
+
+# Cargo lock for non-library crates is often committed, but keeping it here
+# Remove this line if you want to commit Cargo.lock
+# Cargo.lock
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+
+# Log files
+*.log
