@@ -86,6 +86,8 @@ pub struct SpanBuffer {
     /// Terminal column where this span starts (used to compute left = col * cell_w)
     pub col_start: usize,
     pub row_idx: usize,
+    /// Horizontal offset (pixels) to center the glyph within its cell.
+    pub x_offset: f32,
 }
 
 /// Build per-cell glyphon Buffers for a terminal grid.
@@ -157,10 +159,21 @@ pub fn build_span_buffers(
             buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
             buffer.shape_until_scroll(font_system, false);
 
+            // Center the glyph horizontally within its cell by computing the
+            // difference between the cell width and the actual glyph advance.
+            let glyph_advance: f32 = buffer
+                .layout_runs()
+                .flat_map(|run| run.glyphs.iter())
+                .map(|g| g.w)
+                .sum();
+            let cell_span = cell_w * char_cols as f32;
+            let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
+
             result.push(SpanBuffer {
                 buffer,
                 col_start: col_idx,
                 row_idx,
+                x_offset,
             });
         }
     }

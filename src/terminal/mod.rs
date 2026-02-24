@@ -44,4 +44,13 @@ impl Terminal {
         self.pty.resize(cols as u16, rows as u16)?;
         Ok(())
     }
+
+    /// Returns true if the shell process has exited.
+    pub fn is_pty_dead(&self) -> bool {
+        if let Ok(mut child) = self.pty.child.lock() {
+            matches!(child.try_wait(), Ok(Some(_)))
+        } else {
+            false
+        }
+    }
 }

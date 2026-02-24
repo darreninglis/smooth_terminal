@@ -1,6 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set by `Config::open_in_editor()` (called from ObjC menu handlers that
+/// have no access to `App`).  Polled each frame in the winit event loop.
+pub static OPEN_CONFIG_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 const DEFAULT_CONFIG: &str = include_str!("../../assets/default_config.toml");
 
@@ -100,8 +105,8 @@ fn default_bright_white() -> String { "#a6adc8".to_string() }
 impl Default for ColorsConfig {
     fn default() -> Self {
         Self {
-            background: "#1e1e2e".to_string(),
-            foreground: "#cdd6f4".to_string(),
+            background: "#000000".to_string(),
+            foreground: "#ffffff".to_string(),
             cursor: "#f5c2e7".to_string(),
             black: default_black(),
             red: default_red(),
@@ -231,6 +236,8 @@ impl Config {
         toml::from_str(DEFAULT_CONFIG).unwrap_or_default()
     }
 
+    /// Signal the winit event loop to open the config file in vim inside the
+    /// focused terminal pane.  Safe to call from ObjC handlers.
     pub fn open_in_editor() -> Result<()> {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
@@ -239,10 +246,7 @@ impl Config {
         if !path.exists() {
             std::fs::write(&path, DEFAULT_CONFIG)?;
         }
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "open".to_string());
-        std::process::Command::new(&editor)
-            .arg(&path)
-            .spawn()?;
+        OPEN_CONFIG_REQUESTED.store(true, Ordering::Relaxed);
         Ok(())
     }
 }

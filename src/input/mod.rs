@@ -9,6 +9,7 @@ pub enum InputAction {
     FocusNext,
     FocusPrev,
     Scroll(f32),
+    OpenConfig,
     None,
 }
 
@@ -29,20 +30,28 @@ pub fn handle_key_event(
     match &event.logical_key {
         Key::Character(s) => {
             let ch = s.as_str();
-            if cmd && !shift && ch == "d" {
+            // Lowercase only for shortcut matching: winit reports "D" not "d"
+            // for Cmd+Shift+D, but we must keep the original for PTY writes so
+            // that uppercase letters are not silently downcased.
+            let lc = s.to_lowercase();
+            let lc = lc.as_str();
+            if cmd && !shift && lc == "d" {
                 return InputAction::SplitHorizontal;
             }
-            if cmd && shift && ch == "d" {
+            if cmd && shift && lc == "d" {
                 return InputAction::SplitVertical;
             }
-            if cmd && !shift && ch == "w" {
+            if cmd && !shift && lc == "w" {
                 return InputAction::ClosePane;
             }
-            if cmd && ch == "]" {
+            if cmd && lc == "]" {
                 return InputAction::FocusNext;
             }
-            if cmd && ch == "[" {
+            if cmd && lc == "[" {
                 return InputAction::FocusPrev;
+            }
+            if cmd && lc == "," {
+                return InputAction::OpenConfig;
             }
             // Pass character to PTY
             if cmd {

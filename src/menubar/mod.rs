@@ -1,5 +1,39 @@
 #[cfg(target_os = "macos")]
+use objc2::{declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::runtime::AnyObject;
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSObject;
+
+// A tiny NSObject subclass whose sole purpose is to respond to `openConfig:`
+// from any menu item that targets it.
+#[cfg(target_os = "macos")]
+declare_class!(
+    struct ConfigOpener;
+
+    unsafe impl ClassType for ConfigOpener {
+        type Super = NSObject;
+        type Mutability = mutability::InteriorMutable;
+        const NAME: &'static str = "STConfigOpener";
+    }
+
+    impl DeclaredClass for ConfigOpener {
+        type Ivars = ();
+    }
+
+    unsafe impl ConfigOpener {
+        #[method(openConfig:)]
+        fn open_config(&self, _sender: *mut AnyObject) {
+            let _ = crate::config::Config::open_in_editor();
+        }
+    }
+);
+
+#[cfg(target_os = "macos")]
 pub fn setup_menubar() {
+    use objc2::sel;
     use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem, NSStatusBar};
     use objc2_foundation::{MainThreadMarker, NSString};
 
@@ -9,10 +43,10 @@ pub fn setup_menubar() {
     unsafe {
         let mtm = MainThreadMarker::new().expect("must be on main thread");
 
-        // ── Left-side menu bar: rename the app-menu title ──────────────────
-        // winit creates a default NSApplication main menu whose first item
-        // carries the process name.  Overwrite it so the user sees
-        // "smooth terminal <N>" in the menu bar when the app is frontmost.
+        // Allocate the config opener; leaked so it stays alive for the app lifetime.
+        let opener: Retained<ConfigOpener> = msg_send_id![ConfigOpener::class(), new];
+
+        // ── Left-side menu bar: rename app-menu title + add Preferences ────────
         let ns_app = NSApplication::sharedApplication(mtm);
         if let Some(main_menu) = ns_app.mainMenu() {
             if main_menu.numberOfItems() > 0 {
@@ -20,13 +54,30 @@ pub fn setup_menubar() {
                     let new_title =
                         NSString::from_str(&format!("smooth terminal {}", BUILD));
                     app_menu_item.setTitle(&new_title);
+
+                    // Get the app submenu (winit creates it automatically).
+                    let app_submenu: Option<Retained<NSMenu>> =
+                        msg_send_id![&*app_menu_item, submenu];
+                    if let Some(submenu) = app_submenu {
+                        // Insert "Preferences…" at index 1 (after "About …"),
+                        // which is the standard macOS position.
+                        let prefs_title = NSString::from_str("Preferences\u{2026}");
+                        let prefs_key = NSString::from_str(",");
+                        let prefs_item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                            mtm.alloc(),
+                            &prefs_title,
+                            Some(sel!(openConfig:)),
+                            &prefs_key,
+                        );
+                        let _: () = msg_send![&*prefs_item, setTarget: &*opener];
+                        let _: () =
+                            msg_send![&*submenu, insertItem: &*prefs_item atIndex: 1_isize];
+                    }
                 }
             }
         }
 
         // ── Right-side menu bar: status-bar item ────────────────────────────
-        // Short label ("st <N>") reduces the chance of being clipped by the
-        // notch or crowded by other status-bar icons.
         let status_bar = NSStatusBar::systemStatusBar();
         // NSVariableStatusItemLength = -1.0
         let status_item = status_bar.statusItemWithLength(-1.0_f64);
@@ -41,14 +92,14 @@ pub fn setup_menubar() {
 
         {
             let title = NSString::from_str("Open Config");
-            let action = objc2::sel!(openConfig:);
             let key = NSString::from_str("");
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
                 &title,
-                Some(action),
+                Some(sel!(openConfig:)),
                 &key,
             );
+            let _: () = msg_send![&*item, setTarget: &*opener];
             menu.addItem(&item);
         }
 
@@ -56,12 +107,11 @@ pub fn setup_menubar() {
 
         {
             let title = NSString::from_str("Quit");
-            let action = objc2::sel!(terminate:);
             let key = NSString::from_str("q");
             let item = NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
                 &title,
-                Some(action),
+                Some(sel!(terminate:)),
                 &key,
             );
             menu.addItem(&item);
@@ -69,9 +119,10 @@ pub fn setup_menubar() {
 
         status_item.setMenu(Some(&menu));
 
-        // NSStatusBar retains the item, but we also forget our Retained<T>
-        // wrapper so the Rust drop glue can never send an extra `release`.
+        // NSStatusBar retains the item; forget our wrapper to avoid a double-release.
         std::mem::forget(status_item);
+        // Keep opener alive — it is the target for all config menu items.
+        std::mem::forget(opener);
     }
 }
 

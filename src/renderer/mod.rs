@@ -8,10 +8,10 @@ use crate::config::{parse_hex_color, Config};
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::background::BackgroundRenderer;
-use crate::renderer::cell_bg::{cell_quad_vertices, CellBgRenderer};
+use crate::renderer::cell_bg::CellBgRenderer;
 use crate::renderer::cursor::CursorAnimator;
 use crate::renderer::text_renderer::{
-    build_span_buffers, resolve_color, to_glyphon_color, PaneTextRenderer, SpanBuffer,
+    build_span_buffers, to_glyphon_color, PaneTextRenderer, SpanBuffer,
 };
 use glyphon::{TextArea, TextBounds};
 use std::collections::HashMap;
@@ -253,39 +253,8 @@ impl Renderer {
         }
 
         // ---- Phase 1: Build cell backgrounds ----
-        let mut bg_vertices: Vec<crate::renderer::cell_bg::CellBgVertex> = Vec::new();
-
-        for (pane_id, pane_rect) in &layout_rects {
-            let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
-                Some(p) => p,
-                None => continue,
-            };
-            let scroll_offset = self.scroll_springs
-                .get(pane_id)
-                .map(|s| s.pixel_offset())
-                .unwrap_or(0.0);
-
-            let grid = pane.terminal.grid.lock();
-            for (row_idx, row) in grid.cells.iter().enumerate() {
-                for (col_idx, cell) in row.iter().enumerate() {
-                    let bg = match &cell.attrs.bg {
-                        crate::terminal::cell::Color::Default => continue,
-                        c => resolve_color(c, fg_color, &palette),
-                    };
-                    let x = pane_rect.x + col_idx as f32 * self.cell_w;
-                    let y = pane_rect.y + row_idx as f32 * self.cell_h - scroll_offset;
-                    if y + self.cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
-                        continue;
-                    }
-                    let verts = cell_quad_vertices(
-                        x, y, self.cell_w, self.cell_h,
-                        [bg[0] * window_opacity, bg[1] * window_opacity, bg[2] * window_opacity, window_opacity],
-                        surface_w, surface_h,
-                    );
-                    bg_vertices.extend_from_slice(&verts);
-                }
-            }
-        }
+        // Cell background colors are not rendered (no colored highlighting behind text).
+        let bg_vertices: Vec<crate::renderer::cell_bg::CellBgVertex> = Vec::new();
 
         let quad_count = bg_vertices.len() / 4;
         if quad_count > 0 {
@@ -357,7 +326,7 @@ impl Renderer {
                     if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                         continue;
                     }
-                    let x = pane_rect.x + sb.col_start as f32 * cell_w;
+                    let x = pane_rect.x + sb.col_start as f32 * cell_w + sb.x_offset;
                     text_areas.push(TextArea {
                         buffer: &sb.buffer,
                         left: x,
@@ -426,6 +395,38 @@ impl Renderer {
                 anim.move_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
             }
         }
+    }
+
+    /// Apply updated config values. Returns true if font metrics changed
+    /// (caller must then resize panes).
+    pub fn apply_config(&mut self, new_config: Config, scale_factor: f32) -> bool {
+        let font_changed = new_config.font.family != self.app_config.font.family
+            || (new_config.font.size - self.app_config.font.size).abs() > 0.01
+            || (new_config.font.line_height - self.app_config.font.line_height).abs() > 0.01;
+
+        self.app_config = new_config;
+
+        if font_changed {
+            let font_size_px = self.app_config.font.size * scale_factor;
+            let cell_h = font_size_px * self.app_config.font.line_height;
+            let cell_w = measure_cell_width(
+                &mut self.text_renderer.font_system,
+                font_size_px,
+                cell_h,
+                &self.app_config.font.family,
+            );
+            self.font_size_px = font_size_px;
+            self.cell_h = cell_h;
+            self.cell_w = cell_w;
+            for anim in self.cursor_animators.values_mut() {
+                anim.set_cell_size(cell_w, cell_h);
+            }
+        }
+
+        // Always clear text cache — forces re-shaping with new colors and/or font
+        self.text_cache.clear();
+
+        font_changed
     }
 
     pub fn snap_cursor_for_pane(

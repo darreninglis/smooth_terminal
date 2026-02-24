@@ -1,6 +1,5 @@
 # TODO
 
-1. Complete macOS app build
-2. Change the default backgroung to black & the font color to white
-3. remove the green highlighting background from all text
-4. improve how the font renderes, currently the letters are not always centered in each block
+1. Change the default background to black & the font color to white
+2. remove the green highlighting background from all text
+3. improve how the font renders, currently the letters are not always centered in each block

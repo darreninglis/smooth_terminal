@@ -1,12 +1,15 @@
-use crate::config::Config;
+use crate::config::{Config, OPEN_CONFIG_REQUESTED};
 use crate::input::{handle_key_event, handle_scroll, InputAction};
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::Renderer;
+use crossbeam_channel::Receiver;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -18,6 +21,9 @@ pub struct App {
     config: Config,
     last_frame: Instant,
     modifiers: ModifiersState,
+    config_rx: Option<Receiver<()>>,
+    _config_watcher: Option<RecommendedWatcher>,
+    cursor_pos: (f32, f32),
 }
 
 impl App {
@@ -29,6 +35,9 @@ impl App {
             config,
             last_frame: Instant::now(),
             modifiers: ModifiersState::empty(),
+            config_rx: None,
+            _config_watcher: None,
+            cursor_pos: (0.0, 0.0),
         }
     }
 
@@ -63,6 +72,18 @@ impl App {
             (r.cell_w, r.cell_h)
         } else {
             (8.4, 16.8)
+        }
+    }
+
+    /// Write a vim invocation for the config file to the focused pane's PTY.
+    /// Single-quotes the path to handle spaces (e.g. "Application Support").
+    fn open_config_in_pane(&mut self) {
+        if let Some(pt) = &mut self.pane_tree {
+            if let Some(pane) = pt.focused_pane_mut() {
+                let path = Config::config_path();
+                let cmd = format!("vim '{}'\r", path.display());
+                let _ = pane.terminal.write_input(cmd.as_bytes());
+            }
         }
     }
 }
@@ -100,6 +121,27 @@ impl ApplicationHandler for App {
         self.renderer = Some(renderer);
         self.pane_tree = Some(pane_tree);
         self.last_frame = Instant::now();
+
+        // Set up config file watcher for hot-reload
+        let config_path = Config::config_path();
+        let (tx, rx) = crossbeam_channel::bounded::<()>(1);
+        let watch_path = config_path.clone();
+        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(event) = res {
+                if (event.kind.is_modify() || event.kind.is_create())
+                    && event.paths.iter().any(|p| p == &watch_path)
+                {
+                    let _ = tx.try_send(());
+                }
+            }
+        }).ok();
+        if let Some(ref mut w) = watcher {
+            if let Some(dir) = config_path.parent() {
+                let _ = w.watch(dir, RecursiveMode::NonRecursive);
+            }
+        }
+        self.config_rx = Some(rx);
+        self._config_watcher = watcher;
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
@@ -180,8 +222,33 @@ impl ApplicationHandler for App {
                             pt.focus_prev();
                         }
                     }
+                    InputAction::OpenConfig => {
+                        self.open_config_in_pane();
+                    }
                     InputAction::None => {}
                     InputAction::Scroll(_) => {}
+                }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                // position is already PhysicalPosition (device pixels) — no scale needed.
+                self.cursor_pos = (position.x as f32, position.y as f32);
+            }
+
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                // Click-to-focus: find which pane contains the cursor and focus it.
+                let rect = self.content_rect();
+                if let Some(pt) = &mut self.pane_tree {
+                    let layout_rects = pt.layout.compute_rects(rect);
+                    let (cx, cy) = self.cursor_pos;
+                    for (pane_id, pane_rect) in &layout_rects {
+                        if cx >= pane_rect.x && cx < pane_rect.x + pane_rect.width
+                            && cy >= pane_rect.y && cy < pane_rect.y + pane_rect.height
+                        {
+                            pt.focused_id = *pane_id;
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -201,6 +268,40 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.05);
                 self.last_frame = now;
+
+                // Hot-reload config if file changed
+                if self.config_rx.as_ref().map_or(false, |rx| rx.try_recv().is_ok()) {
+                    let new_config = Config::load_or_default();
+                    self.config = new_config.clone();
+                    let rect = self.content_rect();
+                    if let (Some(renderer), Some(window), Some(pane_tree)) =
+                        (&mut self.renderer, &self.window, &mut self.pane_tree)
+                    {
+                        let scale = window.scale_factor() as f32;
+                        let font_changed = renderer.apply_config(new_config, scale);
+                        if font_changed {
+                            let layout_rects = pane_tree.layout.compute_rects(rect);
+                            pane_tree.resize_panes(&layout_rects, renderer.cell_w, renderer.cell_h);
+                        }
+                    }
+                }
+
+                // Open config in pane if requested via menu item
+                if OPEN_CONFIG_REQUESTED.swap(false, Ordering::Relaxed) {
+                    self.open_config_in_pane();
+                }
+
+                // Auto-close panes whose shell has exited
+                if let Some(pt) = &mut self.pane_tree {
+                    let dead = pt.dead_pane_ids();
+                    for id in dead {
+                        pt.close_pane(id);
+                    }
+                    if pt.panes.is_empty() {
+                        event_loop.exit();
+                        return;
+                    }
+                }
 
                 // Drain PTY output
                 if let Some(pt) = &mut self.pane_tree {

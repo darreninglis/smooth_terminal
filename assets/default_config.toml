@@ -11,8 +11,8 @@ size = 14.0
 line_height = 1.2
 
 [colors]
-background = "#1e1e2e"
-foreground = "#cdd6f4"
+background = "#000000"
+foreground = "#ffffff"
 cursor = "#f5c2e7"
 # ANSI palette (optional overrides)
 black   = "#45475a"

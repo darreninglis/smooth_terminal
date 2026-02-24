@@ -98,19 +98,33 @@ impl PaneTree {
     }
 
     pub fn close_focused(&mut self) {
+        self.close_pane(self.focused_id);
+    }
+
+    /// Close a specific pane by ID. No-op if it is the last pane.
+    pub fn close_pane(&mut self, id: usize) {
         if self.panes.len() <= 1 {
             return;
         }
-        let focused = self.focused_id;
-        self.panes.retain(|p| p.id != focused);
+        self.panes.retain(|p| p.id != id);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));
-        self.layout = layout.remove(focused).unwrap_or(Layout::Leaf(0));
+        self.layout = layout.remove(id).unwrap_or(Layout::Leaf(0));
 
-        // Focus first remaining pane
-        if let Some(first) = self.panes.first() {
-            self.focused_id = first.id;
+        // If we just closed the focused pane, move focus to the first remaining one.
+        if self.focused_id == id {
+            if let Some(first) = self.panes.first() {
+                self.focused_id = first.id;
+            }
         }
+    }
+
+    /// IDs of panes whose shell process has exited.
+    pub fn dead_pane_ids(&self) -> Vec<usize> {
+        self.panes.iter()
+            .filter(|p| p.terminal.is_pty_dead())
+            .map(|p| p.id)
+            .collect()
     }
 
     pub fn focus_next(&mut self) {
