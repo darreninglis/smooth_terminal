@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Bundle identity -->
+    <key>CFBundleName</key>
+    <string>Smooth Terminal</string>
+    <key>CFBundleDisplayName</key>
+    <string>Smooth Terminal</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.darreninglis.smooth-terminal</string>
+
+    <!-- Bundle version -->
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <!-- Bundle type -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>smooth_terminal</string>
+
+    <!-- Icon (References Contents/Resources/AppIcon.icns) -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
+    <!-- macOS display -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <!-- Principal class — required for Cocoa apps -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- Minimum macOS version (Metal + winit 0.30 require at least 13) -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- Ensure the app appears in the Dock and can receive keyboard focus -->
+    <key>LSUIElement</key>
+    <false/>
+</dict>
+</plist>

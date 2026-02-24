@@ -22,3 +22,9 @@
 
 # Log files
 *.log
+
+# Built app bundle
+*.app/
+
+# Temporary icon source
+icon_1024.png
