@@ -39,6 +39,7 @@ pub struct Renderer {
     pub cell_w: f32,
     pub cell_h: f32,
     pub font_size_px: f32,
+    pub scale_factor: f32,
     pub app_config: Config,
 }
 
@@ -154,6 +155,7 @@ impl Renderer {
             cell_w,
             cell_h,
             font_size_px,
+            scale_factor,
             app_config,
         }
     }
@@ -397,16 +399,18 @@ impl Renderer {
         }
     }
 
-    /// Apply updated config values. Returns true if font metrics changed
-    /// (caller must then resize panes).
+    /// Apply updated config values and/or DPI scale changes. Returns true if
+    /// cell metrics changed (caller must then resize panes).
     pub fn apply_config(&mut self, new_config: Config, scale_factor: f32) -> bool {
         let font_changed = new_config.font.family != self.app_config.font.family
             || (new_config.font.size - self.app_config.font.size).abs() > 0.01
             || (new_config.font.line_height - self.app_config.font.line_height).abs() > 0.01;
+        let scale_changed = (scale_factor - self.scale_factor).abs() > 0.001;
+        let metrics_changed = font_changed || scale_changed;
 
         self.app_config = new_config;
 
-        if font_changed {
+        if metrics_changed {
             let font_size_px = self.app_config.font.size * scale_factor;
             let cell_h = font_size_px * self.app_config.font.line_height;
             let cell_w = measure_cell_width(
@@ -418,6 +422,7 @@ impl Renderer {
             self.font_size_px = font_size_px;
             self.cell_h = cell_h;
             self.cell_w = cell_w;
+            self.scale_factor = scale_factor;
             for anim in self.cursor_animators.values_mut() {
                 anim.set_cell_size(cell_w, cell_h);
             }
@@ -426,7 +431,7 @@ impl Renderer {
         // Always clear text cache — forces re-shaping with new colors and/or font
         self.text_cache.clear();
 
-        font_changed
+        metrics_changed
     }
 
     pub fn snap_cursor_for_pane(

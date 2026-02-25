@@ -177,6 +177,17 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                let rect = self.content_rect();
+                if let (Some(renderer), Some(pane_tree)) = (&mut self.renderer, &mut self.pane_tree) {
+                    let metrics_changed = renderer.apply_config(self.config.clone(), scale_factor as f32);
+                    if metrics_changed {
+                        let layout_rects = pane_tree.layout.compute_rects(rect);
+                        pane_tree.resize_panes(&layout_rects, renderer.cell_w, renderer.cell_h);
+                    }
+                }
+            }
+
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = new_mods.state();
             }
@@ -307,8 +318,8 @@ impl ApplicationHandler for App {
                         (&mut self.renderer, &self.window, &mut self.pane_tree)
                     {
                         let scale = window.scale_factor() as f32;
-                        let font_changed = renderer.apply_config(new_config, scale);
-                        if font_changed {
+                        let metrics_changed = renderer.apply_config(new_config, scale);
+                        if metrics_changed {
                             let layout_rects = pane_tree.layout.compute_rects(rect);
                             pane_tree.resize_panes(&layout_rects, renderer.cell_w, renderer.cell_h);
                         }
