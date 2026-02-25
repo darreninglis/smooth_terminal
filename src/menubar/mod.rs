@@ -34,7 +34,7 @@ declare_class!(
 #[cfg(target_os = "macos")]
 pub fn setup_menubar() {
     use objc2::sel;
-    use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem, NSStatusBar};
+    use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSString};
 
     // BUILD_NUMBER is injected at compile time by build.rs.
@@ -77,50 +77,6 @@ pub fn setup_menubar() {
             }
         }
 
-        // ── Right-side menu bar: status-bar item ────────────────────────────
-        let status_bar = NSStatusBar::systemStatusBar();
-        // NSVariableStatusItemLength = -1.0
-        let status_item = status_bar.statusItemWithLength(-1.0_f64);
-
-        if let Some(button) = status_item.button(mtm) {
-            let label = format!("st {}", BUILD);
-            button.setTitle(&NSString::from_str(&label));
-        }
-
-        // Build the drop-down menu for the status-bar item.
-        let menu = NSMenu::new(mtm);
-
-        {
-            let title = NSString::from_str("Open Config");
-            let key = NSString::from_str("");
-            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                mtm.alloc(),
-                &title,
-                Some(sel!(openConfig:)),
-                &key,
-            );
-            let _: () = msg_send![&*item, setTarget: &*opener];
-            menu.addItem(&item);
-        }
-
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-        {
-            let title = NSString::from_str("Quit");
-            let key = NSString::from_str("q");
-            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                mtm.alloc(),
-                &title,
-                Some(sel!(terminate:)),
-                &key,
-            );
-            menu.addItem(&item);
-        }
-
-        status_item.setMenu(Some(&menu));
-
-        // NSStatusBar retains the item; forget our wrapper to avoid a double-release.
-        std::mem::forget(status_item);
         // Keep opener alive — it is the target for all config menu items.
         std::mem::forget(opener);
     }
