@@ -1,5 +1,6 @@
 use crate::config::{Config, OPEN_CONFIG_REQUESTED};
 use crate::input::{handle_key_event, handle_scroll, InputAction};
+use crate::pane::Direction;
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::Renderer;
@@ -220,6 +221,34 @@ impl ApplicationHandler for App {
                     InputAction::FocusPrev => {
                         if let Some(pt) = &mut self.pane_tree {
                             pt.focus_prev();
+                        }
+                    }
+                    InputAction::FocusLeft => {
+                        let rect = self.content_rect();
+                        if let Some(pt) = &mut self.pane_tree {
+                            let rects = pt.layout.compute_rects(rect);
+                            pt.focus_direction(&rects, Direction::Left);
+                        }
+                    }
+                    InputAction::FocusRight => {
+                        let rect = self.content_rect();
+                        if let Some(pt) = &mut self.pane_tree {
+                            let rects = pt.layout.compute_rects(rect);
+                            pt.focus_direction(&rects, Direction::Right);
+                        }
+                    }
+                    InputAction::FocusUp => {
+                        let rect = self.content_rect();
+                        if let Some(pt) = &mut self.pane_tree {
+                            let rects = pt.layout.compute_rects(rect);
+                            pt.focus_direction(&rects, Direction::Up);
+                        }
+                    }
+                    InputAction::FocusDown => {
+                        let rect = self.content_rect();
+                        if let Some(pt) = &mut self.pane_tree {
+                            let rects = pt.layout.compute_rects(rect);
+                            pt.focus_direction(&rects, Direction::Down);
                         }
                     }
                     InputAction::OpenConfig => {

@@ -8,6 +8,10 @@ pub enum InputAction {
     ClosePane,
     FocusNext,
     FocusPrev,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
     Scroll(f32),
     OpenConfig,
     None,
@@ -60,6 +64,15 @@ pub fn handle_key_event(
             return InputAction::WriteBytes(encode_key_character(ch, ctrl, alt));
         }
         Key::Named(named) => {
+            if shift {
+                match named {
+                    NamedKey::ArrowLeft  => return InputAction::FocusLeft,
+                    NamedKey::ArrowRight => return InputAction::FocusRight,
+                    NamedKey::ArrowUp    => return InputAction::FocusUp,
+                    NamedKey::ArrowDown  => return InputAction::FocusDown,
+                    _ => {}
+                }
+            }
             return InputAction::WriteBytes(encode_named_key(named, modifiers));
         }
         _ => {}
@@ -107,12 +120,10 @@ fn encode_named_key(key: &NamedKey, modifiers: ModifiersState) -> Vec<u8> {
         NamedKey::Escape => vec![0x1b],
         NamedKey::ArrowUp => {
             if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'A'] }
-            else if shift { vec![0x1b, b'[', b'1', b';', b'2', b'A'] }
             else { vec![0x1b, b'[', b'A'] }
         }
         NamedKey::ArrowDown => {
             if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'B'] }
-            else if shift { vec![0x1b, b'[', b'1', b';', b'2', b'B'] }
             else { vec![0x1b, b'[', b'B'] }
         }
         NamedKey::ArrowRight => {

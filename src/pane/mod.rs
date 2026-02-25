@@ -3,6 +3,8 @@ pub mod layout;
 use anyhow::Result;
 use layout::{Layout, Rect};
 
+pub enum Direction { Left, Right, Up, Down }
+
 use crate::terminal::Terminal;
 
 pub struct Pane {
@@ -139,6 +141,49 @@ impl PaneTree {
         if ids.is_empty() { return; }
         let pos = ids.iter().position(|&id| id == self.focused_id).unwrap_or(0);
         self.focused_id = ids[(pos + ids.len() - 1) % ids.len()];
+    }
+
+    /// Focus the nearest pane in the given direction from the currently focused pane.
+    /// `layout_rects` must be pre-computed from the current content rect.
+    pub fn focus_direction(&mut self, layout_rects: &[(usize, Rect)], dir: Direction) {
+        let focused_rect = match layout_rects.iter().find(|(id, _)| *id == self.focused_id) {
+            Some((_, r)) => *r,
+            None => return,
+        };
+
+        let mut best_id: Option<usize> = None;
+        let mut best_dist = f32::MAX;
+
+        let fcx = focused_rect.x + focused_rect.width  * 0.5;
+        let fcy = focused_rect.y + focused_rect.height * 0.5;
+
+        for (id, rect) in layout_rects {
+            if *id == self.focused_id {
+                continue;
+            }
+            // A candidate qualifies if its opposing edge is flush with or beyond
+            // the focused pane's leading edge in the chosen direction.
+            let qualifies = match dir {
+                Direction::Left  => rect.x + rect.width  <= focused_rect.x + 1.0,
+                Direction::Right => rect.x               >= focused_rect.x + focused_rect.width  - 1.0,
+                Direction::Up    => rect.y + rect.height <= focused_rect.y + 1.0,
+                Direction::Down  => rect.y               >= focused_rect.y + focused_rect.height - 1.0,
+            };
+            if !qualifies {
+                continue;
+            }
+            let cx = rect.x + rect.width  * 0.5;
+            let cy = rect.y + rect.height * 0.5;
+            let dist = (cx - fcx).powi(2) + (cy - fcy).powi(2);
+            if dist < best_dist {
+                best_dist = dist;
+                best_id = Some(*id);
+            }
+        }
+
+        if let Some(id) = best_id {
+            self.focused_id = id;
+        }
     }
 
     pub fn drain_all_pty_output(&mut self) {

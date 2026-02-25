@@ -67,6 +67,28 @@ cargo run
 | `make run` | `cargo run` (development, no bundle) |
 | `make clean` | Remove build artefacts and `Smooth Terminal.app` |
 
+## Key bindings
+
+### Pane management
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+D` | Split pane horizontally |
+| `Cmd+Shift+D` | Split pane vertically |
+| `Cmd+W` | Close current pane |
+| `Cmd+]` | Focus next pane |
+| `Cmd+[` | Focus previous pane |
+| `Shift+Left` | Focus pane to the left |
+| `Shift+Right` | Focus pane to the right |
+| `Shift+Up` | Focus pane above |
+| `Shift+Down` | Focus pane below |
+
+### Other
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+,` | Open config file |
+
 ## Configuration
 
 On first launch, a default config is written to:
