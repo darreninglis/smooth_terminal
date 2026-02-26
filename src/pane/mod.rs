@@ -103,11 +103,8 @@ impl PaneTree {
         self.close_pane(self.focused_id);
     }
 
-    /// Close a specific pane by ID. No-op if it is the last pane.
+    /// Close a specific pane by ID.
     pub fn close_pane(&mut self, id: usize) {
-        if self.panes.len() <= 1 {
-            return;
-        }
         self.panes.retain(|p| p.id != id);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));

@@ -16,6 +16,11 @@ pub enum InputAction {
     OpenConfig,
     NewTab,
     NewWindow,
+    SwitchTab(usize),
+    TileLeft,
+    TileRight,
+    Maximize,
+    RestoreWindow,
     None,
 }
 
@@ -65,6 +70,14 @@ pub fn handle_key_event(
             if cmd && !shift && lc == "n" {
                 return InputAction::NewWindow;
             }
+            // Cmd+1-9: switch to tab N
+            if cmd && !shift && !ctrl && !alt {
+                if let Ok(n) = lc.parse::<usize>() {
+                    if (1..=9).contains(&n) {
+                        return InputAction::SwitchTab(n);
+                    }
+                }
+            }
             // Pass character to PTY
             if cmd {
                 return InputAction::None; // Don't pass Cmd shortcuts to shell
@@ -80,6 +93,22 @@ pub fn handle_key_event(
                     NamedKey::ArrowDown  => return InputAction::FocusDown,
                     _ => {}
                 }
+            }
+            // fn+Ctrl+Arrow keys: map to window tiling actions.
+            // On macOS fn+Right=End, fn+Left=Home, fn+Up=PageUp, fn+Down=PageDown.
+            if ctrl && !shift && !cmd {
+                match named {
+                    NamedKey::End      => return InputAction::TileRight,
+                    NamedKey::Home     => return InputAction::TileLeft,
+                    NamedKey::PageUp   => return InputAction::Maximize,
+                    NamedKey::PageDown => return InputAction::RestoreWindow,
+                    _ => {}
+                }
+            }
+            // Don't forward Cmd+named-key combos to the PTY; let macOS handle them
+            // (e.g. Cmd+Arrow for window management).
+            if cmd {
+                return InputAction::None;
             }
             return InputAction::WriteBytes(encode_named_key(named, modifiers));
         }

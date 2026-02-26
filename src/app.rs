@@ -16,6 +16,62 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowAttributes, WindowId};
 
+// ---------------------------------------------------------------------------
+// macOS geometry types used for window tiling and tab-bar hit-testing.
+// These mirror the C layout of CGPoint / CGSize / CGRect so they can be
+// passed directly through objc2 msg_send! calls.
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "macos")]
+mod mac_geom {
+    use objc2::encode::{Encode, Encoding};
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug)]
+    pub struct CGPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug)]
+    pub struct CGSize {
+        pub width: f64,
+        pub height: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug)]
+    pub struct CGRect {
+        pub origin: CGPoint,
+        pub size: CGSize,
+    }
+
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]);
+    }
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGSize", &[Encoding::Double, Encoding::Double]);
+    }
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+}
+
+#[cfg(target_os = "macos")]
+use mac_geom::{CGPoint, CGRect, CGSize};
+
+/// Window-tiling target positions (used by macOS tile helpers).
+#[cfg(target_os = "macos")]
+enum MacTilePos {
+    Left,
+    Right,
+    Maximize,
+    Restore,
+}
+
 struct WindowState {
     window: Arc<Window>,
     renderer: Renderer,
@@ -63,6 +119,9 @@ pub struct App {
     config: Config,
     // The first window ID is used as the "primary" for initial setup
     first_window_id: Option<WindowId>,
+    // Retained NSEvent monitor for double-click tab renaming (macOS only).
+    #[cfg(target_os = "macos")]
+    _event_monitor: Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
 }
 
 impl App {
@@ -71,6 +130,8 @@ impl App {
             windows: HashMap::new(),
             config,
             first_window_id: None,
+            #[cfg(target_os = "macos")]
+            _event_monitor: None,
         }
     }
 
@@ -196,6 +257,231 @@ impl App {
         let (new_id, new_state) = Self::create_window_state(event_loop, &self.config);
         self.windows.insert(new_id, new_state);
     }
+
+    // -----------------------------------------------------------------------
+    // macOS helpers
+    // -----------------------------------------------------------------------
+
+    /// Switch to the tab at 1-based index `n` using the native macOS
+    /// NSWindowTabGroup API.
+    #[cfg(target_os = "macos")]
+    fn macos_switch_tab(window: &Arc<Window>, n: usize) {
+        use objc2::{msg_send, msg_send_id};
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+        use objc2_app_kit::NSWindow;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = window.window_handle() else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+
+        unsafe {
+            let view = h.ns_view.as_ptr() as *const AnyObject;
+            let ns_window: Option<Retained<NSWindow>> = msg_send_id![&*view, window];
+            let Some(ns_window) = ns_window else { return };
+
+            let tab_group: Option<Retained<AnyObject>> =
+                msg_send_id![&*ns_window, tabGroup];
+            let Some(tab_group) = tab_group else { return };
+
+            let tabs: Retained<AnyObject> = msg_send_id![&*tab_group, windows];
+            let count: usize = msg_send![&*tabs, count];
+            let idx = n.saturating_sub(1);
+            if idx < count {
+                let target: Retained<AnyObject> =
+                    msg_send_id![&*tabs, objectAtIndex: idx];
+                let _: () = msg_send![&*target, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+            }
+        }
+    }
+
+    /// Tile the current window to a screen position using NSWindow
+    /// `setFrame:display:animate:`.
+    #[cfg(target_os = "macos")]
+    fn macos_tile_window(window: &Arc<Window>, pos: MacTilePos) {
+        use objc2::{class, msg_send, msg_send_id};
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+        use objc2_app_kit::NSWindow;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = window.window_handle() else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+
+        unsafe {
+            let view = h.ns_view.as_ptr() as *const AnyObject;
+            let ns_window: Option<Retained<NSWindow>> = msg_send_id![&*view, window];
+            let Some(ns_window) = ns_window else { return };
+
+            // Prefer the window's own screen; fall back to the first screen.
+            let screen: Option<Retained<AnyObject>> = msg_send_id![&*ns_window, screen];
+            let screen = screen.or_else(|| {
+                let screens: Retained<AnyObject> =
+                    msg_send_id![class!(NSScreen), screens];
+                let count: usize = msg_send![&*screens, count];
+                if count > 0 {
+                    Some(msg_send_id![&*screens, objectAtIndex: 0_usize])
+                } else {
+                    None
+                }
+            });
+            let Some(screen) = screen else { return };
+
+            let visible: CGRect = msg_send![&*screen, visibleFrame];
+            let new_frame: CGRect = match pos {
+                MacTilePos::Left => CGRect {
+                    origin: visible.origin,
+                    size: CGSize {
+                        width: visible.size.width / 2.0,
+                        height: visible.size.height,
+                    },
+                },
+                MacTilePos::Right => CGRect {
+                    origin: CGPoint {
+                        x: visible.origin.x + visible.size.width / 2.0,
+                        y: visible.origin.y,
+                    },
+                    size: CGSize {
+                        width: visible.size.width / 2.0,
+                        height: visible.size.height,
+                    },
+                },
+                MacTilePos::Maximize => visible,
+                MacTilePos::Restore => {
+                    let w = 1200.0_f64;
+                    let h = 800.0_f64;
+                    CGRect {
+                        origin: CGPoint {
+                            x: visible.origin.x + (visible.size.width - w) / 2.0,
+                            y: visible.origin.y + (visible.size.height - h) / 2.0,
+                        },
+                        size: CGSize { width: w, height: h },
+                    }
+                }
+            };
+
+            let _: () = msg_send![
+                &*ns_window,
+                setFrame: new_frame
+                display: true
+                animate: true
+            ];
+        }
+    }
+
+    /// Install a local NSEvent monitor that fires for every left-mouse-down
+    /// event and shows a rename dialog when the user double-clicks inside the
+    /// window's title-bar / tab-bar area (above the content layout rect).
+    #[cfg(target_os = "macos")]
+    fn install_tab_rename_monitor()
+        -> Option<objc2::rc::Retained<objc2::runtime::AnyObject>>
+    {
+        use block2::StackBlock;
+        use objc2::{class, msg_send, msg_send_id};
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+
+        // NSEventMaskLeftMouseDown = 1 << 1
+        let mask: u64 = 1 << 1;
+
+        let block = StackBlock::new(|event: *mut AnyObject| -> *mut AnyObject {
+            unsafe {
+                if event.is_null() {
+                    return event;
+                }
+                let click_count: isize = msg_send![&*event, clickCount];
+                if click_count == 2 {
+                    let win_ptr: *mut AnyObject = msg_send![&*event, window];
+                    if !win_ptr.is_null() {
+                        let content_rect: CGRect =
+                            msg_send![&*win_ptr, contentLayoutRect];
+                        let loc: CGPoint = msg_send![&*event, locationInWindow];
+                        let content_top =
+                            content_rect.origin.y + content_rect.size.height;
+                        // Click is above the content area → title bar / tab bar.
+                        if loc.y > content_top {
+                            // Retain the window so it stays alive during the
+                            // synchronous modal dialog.
+                            let retained: Option<Retained<AnyObject>> =
+                                Retained::retain(win_ptr);
+                            if let Some(win) = retained {
+                                macos_show_rename_dialog(&win);
+                            }
+                        }
+                    }
+                }
+                event
+            }
+        });
+
+        unsafe {
+            msg_send_id![
+                class!(NSEvent),
+                addLocalMonitorForEventsMatchingMask: mask
+                handler: &*block
+            ]
+        }
+    }
+}
+
+/// Show an NSAlert with an NSTextField accessory that lets the user rename
+/// the tab associated with `ns_window`.  Called on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn macos_show_rename_dialog(ns_window: &objc2::runtime::AnyObject) {
+    use objc2::{class, msg_send, msg_send_id};
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSString;
+
+    // Get the current window title as a Rust String via UTF8String.
+    let title_obj: Retained<AnyObject> = msg_send_id![ns_window, title];
+    let cstr: *const std::ffi::c_char = msg_send![&*title_obj, UTF8String];
+    let current_title = if cstr.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned()
+    };
+
+    // Build a 300×24 NSTextField pre-filled with the current title.
+    let frame = CGRect {
+        origin: CGPoint { x: 0.0, y: 0.0 },
+        size: CGSize { width: 300.0, height: 24.0 },
+    };
+    // Use `+new` (alloc+init) then set the frame explicitly; this avoids
+    // having to work with objc2's typed `Allocated<T>` return from `+alloc`.
+    let text_field: Retained<AnyObject> = msg_send_id![class!(NSTextField), new];
+    let _: () = msg_send![&*text_field, setFrame: frame];
+    let title_ns = NSString::from_str(&current_title);
+    let _: () = msg_send![&*text_field, setStringValue: &*title_ns];
+    // Pre-select the existing text so the user can type to replace it.
+    let _: () = msg_send![&*text_field, selectText: std::ptr::null::<AnyObject>()];
+
+    // Build the NSAlert.
+    let alert: Retained<AnyObject> = msg_send_id![class!(NSAlert), new];
+    let msg_text = NSString::from_str("Rename Tab");
+    let _: () = msg_send![&*alert, setMessageText: &*msg_text];
+    let ok_str = NSString::from_str("OK");
+    let _: () = msg_send![&*alert, addButtonWithTitle: &*ok_str];
+    let cancel_str = NSString::from_str("Cancel");
+    let _: () = msg_send![&*alert, addButtonWithTitle: &*cancel_str];
+    let _: () = msg_send![&*alert, setAccessoryView: &*text_field];
+
+    // Run modally on the main thread.
+    let response: isize = msg_send![&*alert, runModal];
+    // NSAlertFirstButtonReturn == 1000
+    if response == 1000 {
+        let new_title_obj: Retained<AnyObject> =
+            msg_send_id![&*text_field, stringValue];
+        let cstr2: *const std::ffi::c_char =
+            msg_send![&*new_title_obj, UTF8String];
+        if !cstr2.is_null() {
+            let new_str = std::ffi::CStr::from_ptr(cstr2).to_string_lossy();
+            if !new_str.is_empty() {
+                let new_ns = NSString::from_str(&*new_str);
+                let _: () = msg_send![ns_window, setTitle: &*new_ns];
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -203,7 +489,10 @@ impl ApplicationHandler for App {
         let (window_id, state) = Self::create_window_state(event_loop, &self.config);
 
         #[cfg(target_os = "macos")]
-        crate::menubar::setup_menubar();
+        {
+            crate::menubar::setup_menubar();
+            self._event_monitor = Self::install_tab_rename_monitor();
+        }
 
         self.first_window_id = Some(window_id);
         self.windows.insert(window_id, state);
@@ -361,6 +650,36 @@ impl ApplicationHandler for App {
                         eprintln!("[debug] NewWindow triggered");
                         self.open_new_window(event_loop);
                         eprintln!("[debug] NewWindow done, windows={}", self.windows.len());
+                    }
+                    InputAction::SwitchTab(n) => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            Self::macos_switch_tab(&state.window, n);
+                        }
+                    }
+                    InputAction::TileLeft => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            Self::macos_tile_window(&state.window, MacTilePos::Left);
+                        }
+                    }
+                    InputAction::TileRight => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            Self::macos_tile_window(&state.window, MacTilePos::Right);
+                        }
+                    }
+                    InputAction::Maximize => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            Self::macos_tile_window(&state.window, MacTilePos::Maximize);
+                        }
+                    }
+                    InputAction::RestoreWindow => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            Self::macos_tile_window(&state.window, MacTilePos::Restore);
+                        }
                     }
                     InputAction::None => {}
                     InputAction::Scroll(_) => {}
