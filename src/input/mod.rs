@@ -14,6 +14,8 @@ pub enum InputAction {
     FocusDown,
     Scroll(f32),
     OpenConfig,
+    NewTab,
+    NewWindow,
     None,
 }
 
@@ -56,6 +58,12 @@ pub fn handle_key_event(
             }
             if cmd && lc == "," {
                 return InputAction::OpenConfig;
+            }
+            if cmd && !shift && lc == "t" {
+                return InputAction::NewTab;
+            }
+            if cmd && !shift && lc == "n" {
+                return InputAction::NewWindow;
             }
             // Pass character to PTY
             if cmd {

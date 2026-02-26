@@ -393,7 +393,9 @@ impl Renderer {
         self.ensure_pane_state(pane_id);
         if let Some(anim) = self.cursor_animators.get_mut(&pane_id) {
             anim.set_cell_size(self.cell_w, self.cell_h);
-            if anim.target_col != col || anim.target_row != row {
+            if anim.is_warming_up() {
+                anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+            } else if anim.target_col != col || anim.target_row != row {
                 anim.move_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
             }
         }

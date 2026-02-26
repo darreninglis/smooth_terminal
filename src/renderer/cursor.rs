@@ -14,6 +14,9 @@ pub struct CursorAnimator {
     pub cell_h: f32,
     pub trail_enabled: bool,
     base_omega: f32,
+    /// Snap instead of animate for the first N ticks so the shell prompt
+    /// appears instantly rather than sliding in from the corner.
+    startup_snaps: u32,
 }
 
 impl CursorAnimator {
@@ -33,6 +36,7 @@ impl CursorAnimator {
             cell_h,
             trail_enabled,
             base_omega: omega,
+            startup_snaps: 30,
         }
     }
 
@@ -127,7 +131,12 @@ impl CursorAnimator {
         self.target_row = row;
     }
 
+    pub fn is_warming_up(&self) -> bool {
+        self.startup_snaps > 0
+    }
+
     pub fn tick(&mut self, dt: f32) {
+        self.startup_snaps = self.startup_snaps.saturating_sub(1);
         for corner in &mut self.corners {
             corner.tick(dt);
         }
