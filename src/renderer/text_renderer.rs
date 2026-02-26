@@ -85,7 +85,8 @@ pub struct SpanBuffer {
     pub buffer: Buffer,
     /// Terminal column where this span starts (used to compute left = col * cell_w)
     pub col_start: usize,
-    pub row_idx: usize,
+    /// Row index relative to the visible area top (negative = scrollback row above viewport).
+    pub row_idx: i32,
     /// Horizontal offset (pixels) to center the glyph within its cell.
     pub x_offset: f32,
 }
@@ -172,12 +173,82 @@ pub fn build_span_buffers(
             result.push(SpanBuffer {
                 buffer,
                 col_start: col_idx,
-                row_idx,
+                row_idx: row_idx as i32,
                 x_offset,
             });
         }
     }
 
+    result
+}
+
+/// Build span buffers for a slice of scrollback rows.
+/// `scrollback_start` is the index of `rows[0]` within the full scrollback buffer.
+/// `scrollback_total_len` is the total scrollback length — used to compute row_idx
+/// as `abs_row - scrollback_total_len` (always negative for scrollback rows).
+pub fn build_scrollback_span_buffers(
+    font_system: &mut FontSystem,
+    rows: &[Vec<crate::terminal::cell::Cell>],
+    scrollback_start: usize,
+    scrollback_total_len: usize,
+    cell_h: f32,
+    font_size: f32,
+    font_family: &str,
+    cell_w: f32,
+    fg_color: [f32; 4],
+    palette: &[[f32; 4]; 16],
+) -> Vec<SpanBuffer> {
+    let metrics = Metrics::new(font_size, cell_h);
+    let family = if font_family.is_empty() {
+        Family::Monospace
+    } else {
+        Family::Name(font_family)
+    };
+    let mut result = Vec::new();
+
+    for (i, row) in rows.iter().enumerate() {
+        if row.iter().all(|c| c.is_empty()) {
+            continue;
+        }
+        let abs_row = scrollback_start + i;
+        let row_idx = abs_row as i64 - scrollback_total_len as i64; // always <= -1
+
+        for (col_idx, cell) in row.iter().enumerate() {
+            if cell.is_empty() { continue; }
+            if cell.ch.is_control() { continue; }
+
+            let raw_fg = if cell.attrs.reverse {
+                resolve_color(&cell.attrs.bg, fg_color, palette)
+            } else {
+                resolve_color(&cell.attrs.fg, fg_color, palette)
+            };
+            let cell_color = to_glyphon_color(raw_fg);
+
+            let char_cols = cell.ch.width().unwrap_or(1).max(1);
+            let buf_w = cell_w * (char_cols as f32 + 1.0);
+
+            let mut buffer = Buffer::new(font_system, metrics);
+            buffer.set_size(font_system, Some(buf_w), Some(cell_h));
+            let attrs = Attrs::new().color(cell_color).family(family);
+            buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
+            buffer.shape_until_scroll(font_system, false);
+
+            let glyph_advance: f32 = buffer
+                .layout_runs()
+                .flat_map(|run| run.glyphs.iter())
+                .map(|g| g.w)
+                .sum();
+            let cell_span = cell_w * char_cols as f32;
+            let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
+
+            result.push(SpanBuffer {
+                buffer,
+                col_start: col_idx,
+                row_idx: row_idx as i32,
+                x_offset,
+            });
+        }
+    }
     result
 }
 

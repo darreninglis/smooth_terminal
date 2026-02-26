@@ -18,6 +18,8 @@ pub struct TerminalGrid {
     /// Incremented on every visible cell change.  The renderer compares this
     /// against a cached value to decide whether to rebuild SpanBuffers.
     pub generation: u64,
+    /// Whether bracketed paste mode (DEC mode 2004) is active.
+    pub bracketed_paste: bool,
 }
 
 impl TerminalGrid {
@@ -37,6 +39,7 @@ impl TerminalGrid {
             title: String::new(),
             pending_wrap: false,
             generation: 0,
+            bracketed_paste: false,
         }
     }
 
@@ -196,5 +199,42 @@ impl TerminalGrid {
 
     pub fn total_rows(&self) -> usize {
         self.scrollback.len() + self.rows
+    }
+
+    /// Extract text for a selection range.
+    /// Coordinates use absolute row indexing:
+    ///   abs_row 0..scrollback.len()         → scrollback rows
+    ///   abs_row scrollback.len()..total_rows → visible rows
+    /// Returns the selected text with lines joined by newlines.
+    pub fn extract_selection(
+        &self,
+        start: (usize, usize), // (abs_row, col) — normalized (start <= end)
+        end: (usize, usize),
+    ) -> String {
+        let slen = self.scrollback.len();
+        let mut lines: Vec<String> = Vec::new();
+        for abs_row in start.0..=end.0 {
+            let row: &[Cell] = if abs_row < slen {
+                &self.scrollback[abs_row]
+            } else {
+                let vr = abs_row - slen;
+                if vr < self.rows { &self.cells[vr] } else { continue }
+            };
+            let col_start = if abs_row == start.0 { start.1 } else { 0 };
+            let col_end = if abs_row == end.0 { end.1 + 1 } else { row.len() };
+            let col_end = col_end.min(row.len());
+            let mut line = String::new();
+            for col in col_start..col_end {
+                if col < row.len() {
+                    let ch = row[col].ch;
+                    if ch != '\0' { line.push(ch); }
+                    else { line.push(' '); }
+                }
+            }
+            // Trim trailing spaces from each line
+            let trimmed = line.trim_end().to_string();
+            lines.push(trimmed);
+        }
+        lines.join("\n")
     }
 }

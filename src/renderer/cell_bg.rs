@@ -98,6 +98,10 @@ impl CellBgRenderer {
         Self { pipeline, vertex_buffer, index_buffer, max_quads }
     }
 
+    pub fn max_quads(&self) -> usize {
+        self.max_quads
+    }
+
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,

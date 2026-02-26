@@ -122,6 +122,40 @@ impl Layout {
         }
     }
 
+    /// Nudge the split ratio of any split that directly contains `target_id`.
+    /// `h_delta` adjusts HSplit ratio (positive → widen left pane, negative → widen right).
+    /// `v_delta` adjusts VSplit ratio (positive → widen top pane, negative → widen bottom).
+    pub fn nudge_ratio_for(&mut self, target_id: usize, h_delta: f32, v_delta: f32) {
+        match self {
+            Layout::HSplit { left, right, ratio } => {
+                if left.contains(target_id) || right.contains(target_id) {
+                    *ratio = (*ratio + h_delta).clamp(0.1, 0.9);
+                } else {
+                    left.nudge_ratio_for(target_id, h_delta, v_delta);
+                    right.nudge_ratio_for(target_id, h_delta, v_delta);
+                }
+            }
+            Layout::VSplit { top, bottom, ratio } => {
+                if top.contains(target_id) || bottom.contains(target_id) {
+                    *ratio = (*ratio + v_delta).clamp(0.1, 0.9);
+                } else {
+                    top.nudge_ratio_for(target_id, h_delta, v_delta);
+                    bottom.nudge_ratio_for(target_id, h_delta, v_delta);
+                }
+            }
+            Layout::Leaf(_) => {}
+        }
+    }
+
+    /// Returns true if this subtree contains the given pane ID.
+    pub fn contains(&self, target_id: usize) -> bool {
+        match self {
+            Layout::Leaf(id) => *id == target_id,
+            Layout::HSplit { left, right, .. } => left.contains(target_id) || right.contains(target_id),
+            Layout::VSplit { top, bottom, .. } => top.contains(target_id) || bottom.contains(target_id),
+        }
+    }
+
     /// Remove pane with `target_id`. Returns None if this node is removed.
     pub fn remove(self, target_id: usize) -> Option<Self> {
         match self {

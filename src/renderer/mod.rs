@@ -8,16 +8,41 @@ use crate::config::{parse_hex_color, Config};
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::background::BackgroundRenderer;
-use crate::renderer::cell_bg::CellBgRenderer;
+use crate::renderer::cell_bg::{cell_quad_vertices, CellBgRenderer, CellBgVertex};
 use crate::renderer::cursor::CursorAnimator;
 use crate::renderer::text_renderer::{
-    build_span_buffers, to_glyphon_color, PaneTextRenderer, SpanBuffer,
+    build_scrollback_span_buffers, build_span_buffers, to_glyphon_color, PaneTextRenderer,
+    SpanBuffer,
 };
 use glyphon::{TextArea, TextBounds};
 use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::SurfaceError;
 use winit::window::Window;
+
+/// A selected region in absolute-row coordinates.
+/// abs_row = 0..scrollback_len   → scrollback row
+/// abs_row = scrollback_len..    → visible row (abs_row - scrollback_len)
+#[derive(Clone, Copy, Debug)]
+pub struct Selection {
+    pub anchor: (usize, usize), // (abs_row, col)
+    pub head: (usize, usize),
+}
+
+impl Selection {
+    /// Returns (start, end) in (abs_row, col) order.
+    pub fn normalized(&self) -> ((usize, usize), (usize, usize)) {
+        if (self.anchor.0, self.anchor.1) <= (self.head.0, self.head.1) {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.head
+    }
+}
 
 pub struct Renderer {
     pub surface: wgpu::Surface<'static>,
@@ -32,9 +57,11 @@ pub struct Renderer {
 
     pub cursor_animators: HashMap<usize, CursorAnimator>,
     pub scroll_springs: HashMap<usize, ScrollSpring>,
-    /// Per-pane span-buffer cache.  Key = pane_id, Value = (grid generation, buffers).
-    /// Rebuilt only when the grid generation changes; reused every other frame.
+    /// Per-pane visible span-buffer cache. Key = pane_id, Value = (grid generation, buffers).
     text_cache: HashMap<usize, (u64, Vec<SpanBuffer>)>,
+    /// Per-pane scrollback span-buffer cache. Key = pane_id,
+    /// Value = ((scrollback_len, first_abs_row), buffers).
+    scrollback_text_cache: HashMap<usize, ((usize, usize), Vec<SpanBuffer>)>,
 
     pub cell_w: f32,
     pub cell_h: f32,
@@ -152,6 +179,7 @@ impl Renderer {
             cursor_animators: HashMap::new(),
             scroll_springs: HashMap::new(),
             text_cache: HashMap::new(),
+            scrollback_text_cache: HashMap::new(),
             cell_w,
             cell_h,
             font_size_px,
@@ -197,6 +225,7 @@ impl Renderer {
         &mut self,
         pane_tree: &PaneTree,
         window_rect: Rect,
+        selection: Option<(usize, &Selection)>, // (focused_pane_id, selection)
     ) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -254,9 +283,139 @@ impl Renderer {
             self.ensure_pane_state(*pane_id);
         }
 
-        // ---- Phase 1: Build cell backgrounds ----
-        // Cell background colors are not rendered (no colored highlighting behind text).
-        let bg_vertices: Vec<crate::renderer::cell_bg::CellBgVertex> = Vec::new();
+        // ---- Update scroll max_offsets and build text caches ----
+        let cell_w = self.cell_w;
+        let cell_h = self.cell_h;
+        let font_size_px = self.font_size_px;
+        let font_family = self.app_config.font.family.clone();
+
+        for (pane_id, pane_rect) in &layout_rects {
+            let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let grid = pane.terminal.grid.lock();
+            let scrollback_len = grid.scrollback.len();
+            let visible_rows = grid.rows;
+            let current_gen = grid.generation;
+
+            // Update scroll spring max_offset from actual scrollback size
+            if let Some(spring) = self.scroll_springs.get_mut(pane_id) {
+                spring.max_offset = scrollback_len as f32 * cell_h;
+            }
+
+            let scroll_offset = self.scroll_springs
+                .get(pane_id)
+                .map(|s| s.pixel_offset())
+                .unwrap_or(0.0);
+
+            // Rebuild visible span buffer cache if grid changed
+            if !self.text_cache.get(pane_id).map_or(false, |(g, _)| *g == current_gen) {
+                let span_buffers = build_span_buffers(
+                    &mut self.text_renderer.font_system,
+                    &grid,
+                    cell_h,
+                    font_size_px,
+                    &font_family,
+                    cell_w,
+                    fg_color,
+                    &palette,
+                );
+                self.text_cache.insert(*pane_id, (current_gen, span_buffers));
+            }
+
+            // Rebuild scrollback span buffer cache if scrolled and cache is stale
+            if scroll_offset > 0.5 && scrollback_len > 0 {
+                // Determine which scrollback rows are visible:
+                // y = pane_rect.y + row_idx * cell_h + scroll_offset
+                // row_idx = abs_row - scrollback_len (negative for scrollback)
+                // Visible: y >= pane_rect.y - cell_h  &&  y < pane_rect.y + pane_rect.height + cell_h
+                let rows_above = (scroll_offset / cell_h).ceil() as usize;
+                let first_abs = scrollback_len.saturating_sub(rows_above + visible_rows);
+                let last_abs = scrollback_len; // exclusive
+
+                let cache_key = (scrollback_len, first_abs);
+                let cache_hit = self
+                    .scrollback_text_cache
+                    .get(pane_id)
+                    .map_or(false, |(k, _)| *k == cache_key);
+
+                if !cache_hit {
+                    let rows_slice = &grid.scrollback[first_abs..last_abs];
+                    let sb_buffers = build_scrollback_span_buffers(
+                        &mut self.text_renderer.font_system,
+                        rows_slice,
+                        first_abs,
+                        scrollback_len,
+                        cell_h,
+                        font_size_px,
+                        &font_family,
+                        cell_w,
+                        fg_color,
+                        &palette,
+                    );
+                    self.scrollback_text_cache.insert(*pane_id, (cache_key, sb_buffers));
+                }
+            } else {
+                // Not scrolled: evict scrollback cache to free memory
+                self.scrollback_text_cache.remove(pane_id);
+            }
+
+            drop(grid);
+        }
+
+        // ---- Phase 1: Selection highlight quads ----
+        let mut bg_vertices: Vec<CellBgVertex> = Vec::new();
+
+        if let Some((sel_pane_id, sel)) = selection {
+            if !sel.is_empty() {
+                if let Some(pane_rect) = layout_rects.iter().find(|(id, _)| *id == sel_pane_id).map(|(_, r)| r) {
+                    if let Some(pane) = pane_tree.panes.iter().find(|p| p.id == sel_pane_id) {
+                        let grid = pane.terminal.grid.lock();
+                        let scrollback_len = grid.scrollback.len();
+                        let visible_rows = grid.rows;
+                        let cols = grid.cols;
+                        drop(grid);
+
+                        let scroll_offset = self.scroll_springs
+                            .get(&sel_pane_id)
+                            .map(|s| s.pixel_offset())
+                            .unwrap_or(0.0);
+
+                        let sel_color = [0.3_f32, 0.5, 0.9, 0.4];
+                        let (start, end) = sel.normalized();
+                        let total_rows = scrollback_len + visible_rows;
+
+                        for abs_row in start.0..=end.0.min(total_rows.saturating_sub(1)) {
+                            let row_idx = abs_row as f32 - scrollback_len as f32;
+                            let y = pane_rect.y + row_idx * cell_h + scroll_offset;
+
+                            // Skip rows outside the pane
+                            if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
+                                continue;
+                            }
+
+                            let col_start = if abs_row == start.0 { start.1 } else { 0 };
+                            let col_end = if abs_row == end.0 { end.1 } else { cols.saturating_sub(1) };
+                            let col_end = col_end.min(cols.saturating_sub(1));
+
+                            for col in col_start..=col_end {
+                                let x = pane_rect.x + col as f32 * cell_w;
+                                let verts = cell_quad_vertices(
+                                    x, y, cell_w, cell_h,
+                                    sel_color,
+                                    surface_w, surface_h,
+                                );
+                                bg_vertices.extend_from_slice(&verts);
+                                if bg_vertices.len() / 4 >= self.cell_bg_renderer.max_quads() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let quad_count = bg_vertices.len() / 4;
         if quad_count > 0 {
@@ -278,53 +437,29 @@ impl Renderer {
             );
         }
 
-        // ---- Phase 3: Build text (generation-cached span buffers) ----
-        let cell_w = self.cell_w;
-        let cell_h = self.cell_h;
-        let font_size_px = self.font_size_px;
-        let font_family = self.app_config.font.family.clone();
-
-        // Phase 3a: Refresh the span-buffer cache for any pane whose grid has
-        // changed since the last frame.  On idle frames (cursor animating but
-        // no new PTY output) this loop does zero shaping work.
-        for (pane_id, _) in &layout_rects {
-            let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
-                Some(p) => p,
-                None => continue,
-            };
-            let grid = pane.terminal.grid.lock();
-            let current_gen = grid.generation;
-            // Skip rebuild if cache is fresh.
-            if self.text_cache.get(pane_id).map_or(false, |(g, _)| *g == current_gen) {
-                continue;
-            }
-            let span_buffers = build_span_buffers(
-                &mut self.text_renderer.font_system,
-                &grid,
-                cell_h,
-                font_size_px,
-                &font_family,
-                cell_w,
-                fg_color,
-                &palette,
-            );
-            drop(grid);
-            self.text_cache.insert(*pane_id, (current_gen, span_buffers));
-        }
-
-        // Phase 3b: Build TextAreas from the (possibly just-refreshed) cache.
-        // Scroll offset is applied here so smooth-scroll animation still works
-        // even when the grid itself hasn't changed.
+        // ---- Phase 3b: Build TextAreas from the caches ----
+        // y formula: y = pane_rect.y + row_idx * cell_h + scroll_offset
+        // (scroll_offset > 0 → content moves down to reveal scrollback from top)
         let default_color = to_glyphon_color(fg_color);
         let mut text_areas: Vec<TextArea> = Vec::new();
+
         for (pane_id, pane_rect) in &layout_rects {
             let scroll_offset = self.scroll_springs
                 .get(pane_id)
                 .map(|s| s.pixel_offset())
                 .unwrap_or(0.0);
+
+            let bounds = TextBounds {
+                left: pane_rect.x as i32,
+                top: pane_rect.y as i32,
+                right: (pane_rect.x + pane_rect.width) as i32,
+                bottom: (pane_rect.y + pane_rect.height) as i32,
+            };
+
+            // Visible rows
             if let Some((_, span_buffers)) = self.text_cache.get(pane_id) {
                 for sb in span_buffers {
-                    let y = pane_rect.y + sb.row_idx as f32 * cell_h - scroll_offset;
+                    let y = pane_rect.y + sb.row_idx as f32 * cell_h + scroll_offset;
                     if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                         continue;
                     }
@@ -334,15 +469,32 @@ impl Renderer {
                         left: x,
                         top: y,
                         scale: 1.0,
-                        bounds: TextBounds {
-                            left: pane_rect.x as i32,
-                            top: pane_rect.y as i32,
-                            right: (pane_rect.x + pane_rect.width) as i32,
-                            bottom: (pane_rect.y + pane_rect.height) as i32,
-                        },
+                        bounds,
                         default_color,
                         custom_glyphs: &[],
                     });
+                }
+            }
+
+            // Scrollback rows (row_idx < 0, only when scrolled)
+            if scroll_offset > 0.5 {
+                if let Some((_, sb_buffers)) = self.scrollback_text_cache.get(pane_id) {
+                    for sb in sb_buffers {
+                        let y = pane_rect.y + sb.row_idx as f32 * cell_h + scroll_offset;
+                        if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
+                            continue;
+                        }
+                        let x = pane_rect.x + sb.col_start as f32 * cell_w + sb.x_offset;
+                        text_areas.push(TextArea {
+                            buffer: &sb.buffer,
+                            left: x,
+                            top: y,
+                            scale: 1.0,
+                            bounds,
+                            default_color,
+                            custom_glyphs: &[],
+                        });
+                    }
                 }
             }
         }
@@ -432,6 +584,7 @@ impl Renderer {
 
         // Always clear text cache — forces re-shaping with new colors and/or font
         self.text_cache.clear();
+        self.scrollback_text_cache.clear();
 
         metrics_changed
     }

@@ -3,7 +3,7 @@ use crate::input::{handle_key_event, handle_scroll, InputAction};
 use crate::pane::Direction;
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
-use crate::renderer::Renderer;
+use crate::renderer::{Renderer, Selection};
 use crossbeam_channel::Receiver;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
@@ -81,6 +81,12 @@ struct WindowState {
     config_rx: Option<Receiver<()>>,
     _config_watcher: Option<RecommendedWatcher>,
     last_frame: Instant,
+    /// Current text selection (if any). Uses abs_row coords.
+    selection: Option<Selection>,
+    /// Which pane_id the current selection belongs to.
+    selection_pane: usize,
+    /// True while the left mouse button is held down (for drag selection).
+    mouse_button_down: bool,
 }
 
 impl WindowState {
@@ -111,6 +117,66 @@ impl WindowState {
             let cmd = format!("vim '{}'\r", path.display());
             let _ = pane.terminal.write_input(cmd.as_bytes());
         }
+    }
+
+    /// Convert a physical-pixel position to an absolute (abs_row, col) grid coordinate.
+    /// abs_row = 0..scrollback_len → scrollback, abs_row = scrollback_len.. → visible rows.
+    fn pixel_to_cell(
+        &self,
+        px: f32,
+        py: f32,
+        pane_rect: Rect,
+        pane_id: usize,
+    ) -> Option<(usize, usize)> {
+        let cell_w = self.renderer.cell_w;
+        let cell_h = self.renderer.cell_h;
+
+        let scroll_offset = self.renderer.scroll_springs
+            .get(&pane_id)
+            .map(|s| s.pixel_offset())
+            .unwrap_or(0.0);
+
+        let pane = self.pane_tree.panes.iter().find(|p| p.id == pane_id)?;
+        let grid = pane.terminal.grid.lock();
+        let scrollback_len = grid.scrollback.len();
+        let visible_rows = grid.rows;
+        let cols = grid.cols;
+        drop(grid);
+
+        // y = pane_rect.y + row_idx * cell_h + scroll_offset
+        // row_idx = abs_row - scrollback_len
+        // => row_idx = (py - pane_rect.y - scroll_offset) / cell_h
+        let row_idx_f = (py - pane_rect.y - scroll_offset) / cell_h;
+        let row_idx = row_idx_f.floor() as i64;
+        let abs_row_i = scrollback_len as i64 + row_idx;
+        if abs_row_i < 0 {
+            return None;
+        }
+        let abs_row = abs_row_i as usize;
+        let total_rows = scrollback_len + visible_rows;
+        if abs_row >= total_rows {
+            return None;
+        }
+
+        let col = ((px - pane_rect.x) / cell_w).floor() as i64;
+        let col = col.clamp(0, cols as i64 - 1) as usize;
+
+        Some((abs_row, col))
+    }
+
+    /// Write input bytes to the focused pane and snap scroll to bottom.
+    fn write_to_focused_pane(&mut self, bytes: &[u8]) {
+        if let Some(pane) = self.pane_tree.focused_pane_mut() {
+            let _ = pane.terminal.write_input(bytes);
+        }
+        // Snap scroll to bottom when typing
+        let focused = self.pane_tree.focused_id;
+        self.renderer.ensure_pane_state(focused);
+        if let Some(spring) = self.renderer.scroll_springs.get_mut(&focused) {
+            spring.snap_to_bottom();
+        }
+        // Clear selection on input
+        self.selection = None;
     }
 }
 
@@ -192,6 +258,9 @@ impl App {
             config_rx: Some(rx),
             _config_watcher: watcher,
             last_frame: Instant::now(),
+            selection: None,
+            selection_pane: 0,
+            mouse_button_down: false,
         };
 
         (window_id, state)
@@ -422,6 +491,36 @@ impl App {
             ]
         }
     }
+
+    /// Copy `text` to the macOS system clipboard via pbcopy.
+    #[cfg(target_os = "macos")]
+    fn macos_copy_to_clipboard(text: &str) {
+        use std::io::Write;
+        match std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+            Err(e) => eprintln!("[clipboard] pbcopy failed: {e}"),
+        }
+    }
+
+    /// Read a string from the macOS system clipboard via pbpaste.
+    #[cfg(target_os = "macos")]
+    fn macos_paste_from_clipboard() -> Option<String> {
+        match std::process::Command::new("pbpaste").output() {
+            Ok(output) => String::from_utf8(output.stdout).ok(),
+            Err(e) => {
+                eprintln!("[clipboard] pbpaste failed: {e}");
+                None
+            }
+        }
+    }
 }
 
 /// Show an NSAlert with an NSTextField accessory that lets the user rename
@@ -562,9 +661,9 @@ impl ApplicationHandler for App {
                 let action = handle_key_event(&event, modifiers);
                 match action {
                     InputAction::WriteBytes(bytes) => {
-                        if let Some(state) = self.windows.get_mut(&window_id) {
-                            if let Some(pane) = state.pane_tree.focused_pane_mut() {
-                                let _ = pane.terminal.write_input(&bytes);
+                        if !bytes.is_empty() {
+                            if let Some(state) = self.windows.get_mut(&window_id) {
+                                state.write_to_focused_pane(&bytes);
                             }
                         }
                     }
@@ -681,6 +780,99 @@ impl ApplicationHandler for App {
                             Self::macos_tile_window(&state.window, MacTilePos::Restore);
                         }
                     }
+                    InputAction::ScrollViewUp => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let focused = state.pane_tree.focused_id;
+                            state.renderer.ensure_pane_state(focused);
+                            let cell_h = state.renderer.cell_h;
+                            if let Some(spring) = state.renderer.scroll_springs.get_mut(&focused) {
+                                spring.scroll_by(cell_h * 5.0);
+                            }
+                        }
+                    }
+                    InputAction::ScrollViewDown => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let focused = state.pane_tree.focused_id;
+                            state.renderer.ensure_pane_state(focused);
+                            let cell_h = state.renderer.cell_h;
+                            if let Some(spring) = state.renderer.scroll_springs.get_mut(&focused) {
+                                spring.scroll_by(-cell_h * 5.0);
+                            }
+                        }
+                    }
+                    InputAction::CopySelection => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get(&window_id) {
+                            if let Some(sel) = &state.selection {
+                                if !sel.is_empty() {
+                                    let pane_id = state.selection_pane;
+                                    if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == pane_id) {
+                                        let grid = pane.terminal.grid.lock();
+                                        let (start, end) = sel.normalized();
+                                        let text = grid.extract_selection(start, end);
+                                        drop(grid);
+                                        if !text.is_empty() {
+                                            Self::macos_copy_to_clipboard(&text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    InputAction::Paste => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            if let Some(text) = Self::macos_paste_from_clipboard() {
+                                if let Some(pane) = state.pane_tree.focused_pane_mut() {
+                                    let bracketed = pane.terminal.grid.lock().bracketed_paste;
+                                    if bracketed {
+                                        let mut bytes = b"\x1b[200~".to_vec();
+                                        bytes.extend(text.as_bytes());
+                                        bytes.extend(b"\x1b[201~");
+                                        let _ = pane.terminal.write_input(&bytes);
+                                    } else {
+                                        let _ = pane.terminal.write_input(text.as_bytes());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    InputAction::ResizePaneLeft => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let rect = state.content_rect(&self.config);
+                            let (cw, ch) = state.cell_dims();
+                            state.pane_tree.resize_focused(Direction::Left);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
+                        }
+                    }
+                    InputAction::ResizePaneRight => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let rect = state.content_rect(&self.config);
+                            let (cw, ch) = state.cell_dims();
+                            state.pane_tree.resize_focused(Direction::Right);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
+                        }
+                    }
+                    InputAction::ResizePaneUp => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let rect = state.content_rect(&self.config);
+                            let (cw, ch) = state.cell_dims();
+                            state.pane_tree.resize_focused(Direction::Up);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
+                        }
+                    }
+                    InputAction::ResizePaneDown => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let rect = state.content_rect(&self.config);
+                            let (cw, ch) = state.cell_dims();
+                            state.pane_tree.resize_focused(Direction::Down);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
+                        }
+                    }
                     InputAction::None => {}
                     InputAction::Scroll(_) => {}
                 }
@@ -689,6 +881,22 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
                     state.cursor_pos = (position.x as f32, position.y as f32);
+
+                    // Extend selection if mouse button is held
+                    if state.mouse_button_down {
+                        let (px, py) = state.cursor_pos;
+                        let focused_id = state.pane_tree.focused_id;
+                        let rect = state.content_rect(&self.config);
+                        let layout_rects = state.pane_tree.layout.compute_rects(rect);
+                        if let Some((_, pane_rect)) = layout_rects.iter().find(|(id, _)| *id == focused_id) {
+                            let pane_rect = *pane_rect;
+                            if let Some(head) = state.pixel_to_cell(px, py, pane_rect, focused_id) {
+                                if let Some(sel) = &mut state.selection {
+                                    sel.head = head;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -698,9 +906,12 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.mouse_button_down = true;
                     let rect = state.content_rect(&self.config);
                     let layout_rects = state.pane_tree.layout.compute_rects(rect);
                     let (cx, cy) = state.cursor_pos;
+
+                    // First update focus (click-to-focus pane)
                     for (pane_id, pane_rect) in &layout_rects {
                         if cx >= pane_rect.x
                             && cx < pane_rect.x + pane_rect.width
@@ -709,6 +920,34 @@ impl ApplicationHandler for App {
                         {
                             state.pane_tree.focused_id = *pane_id;
                             break;
+                        }
+                    }
+
+                    // Start a new selection at the click position
+                    let focused_id = state.pane_tree.focused_id;
+                    if let Some((_, pane_rect)) = layout_rects.iter().find(|(id, _)| *id == focused_id) {
+                        let pane_rect = *pane_rect;
+                        if let Some(cell) = state.pixel_to_cell(cx, cy, pane_rect, focused_id) {
+                            state.selection = Some(Selection { anchor: cell, head: cell });
+                            state.selection_pane = focused_id;
+                        } else {
+                            state.selection = None;
+                        }
+                    }
+                }
+            }
+
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(state) = self.windows.get_mut(&window_id) {
+                    state.mouse_button_down = false;
+                    // Finalize selection: if anchor == head, it's a click (clear selection)
+                    if let Some(sel) = &state.selection {
+                        if sel.is_empty() {
+                            state.selection = None;
                         }
                     }
                 }
@@ -791,8 +1030,11 @@ impl ApplicationHandler for App {
                     // Tick animations
                     state.renderer.tick_animations(dt);
 
+                    // Build selection reference for renderer
+                    let sel_ref = state.selection.as_ref().map(|s| (state.selection_pane, s));
+
                     // Render
-                    match state.renderer.render(&state.pane_tree, rect) {
+                    match state.renderer.render(&state.pane_tree, rect, sel_ref) {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                             let s = state.window.inner_size();

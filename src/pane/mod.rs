@@ -183,6 +183,19 @@ impl PaneTree {
         }
     }
 
+    /// Nudge the split ratio containing the focused pane in the given direction.
+    /// Left/Right adjusts horizontal splits; Up/Down adjusts vertical splits.
+    pub fn resize_focused(&mut self, dir: Direction) {
+        let delta = 0.05_f32;
+        let (h_delta, v_delta) = match dir {
+            Direction::Left  => (-delta, 0.0),
+            Direction::Right => ( delta, 0.0),
+            Direction::Up    => (0.0, -delta),
+            Direction::Down  => (0.0,  delta),
+        };
+        self.layout.nudge_ratio_for(self.focused_id, h_delta, v_delta);
+    }
+
     pub fn drain_all_pty_output(&mut self) {
         for pane in &mut self.panes {
             pane.terminal.drain_pty_output();

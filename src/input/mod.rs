@@ -21,6 +21,17 @@ pub enum InputAction {
     TileRight,
     Maximize,
     RestoreWindow,
+    // Scrollback navigation
+    ScrollViewUp,
+    ScrollViewDown,
+    // Clipboard
+    CopySelection,
+    Paste,
+    // Pane resize (Ctrl+Option+Arrow)
+    ResizePaneLeft,
+    ResizePaneRight,
+    ResizePaneUp,
+    ResizePaneDown,
     None,
 }
 
@@ -70,6 +81,14 @@ pub fn handle_key_event(
             if cmd && !shift && lc == "n" {
                 return InputAction::NewWindow;
             }
+            // Cmd+C: copy selection
+            if cmd && !shift && !ctrl && lc == "c" {
+                return InputAction::CopySelection;
+            }
+            // Cmd+V: paste
+            if cmd && !shift && !ctrl && lc == "v" {
+                return InputAction::Paste;
+            }
             // Cmd+1-9: switch to tab N
             if cmd && !shift && !ctrl && !alt {
                 if let Ok(n) = lc.parse::<usize>() {
@@ -102,6 +121,24 @@ pub fn handle_key_event(
                     NamedKey::Home     => return InputAction::TileLeft,
                     NamedKey::PageUp   => return InputAction::Maximize,
                     NamedKey::PageDown => return InputAction::RestoreWindow,
+                    _ => {}
+                }
+            }
+            // Ctrl+Option+Arrow: resize focused pane
+            if ctrl && alt && !cmd && !shift {
+                match named {
+                    NamedKey::ArrowLeft  => return InputAction::ResizePaneLeft,
+                    NamedKey::ArrowRight => return InputAction::ResizePaneRight,
+                    NamedKey::ArrowUp    => return InputAction::ResizePaneUp,
+                    NamedKey::ArrowDown  => return InputAction::ResizePaneDown,
+                    _ => {}
+                }
+            }
+            // Cmd+Up/Down: scrollback navigation
+            if cmd && !shift && !ctrl {
+                match named {
+                    NamedKey::ArrowUp   => return InputAction::ScrollViewUp,
+                    NamedKey::ArrowDown => return InputAction::ScrollViewDown,
                     _ => {}
                 }
             }

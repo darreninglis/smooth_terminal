@@ -62,7 +62,7 @@ impl CursorAnimator {
         self.target_row = row;
 
         let px = pane_x + col as f32 * self.cell_w;
-        let py = pane_y + row as f32 * self.cell_h - scroll_offset;
+        let py = pane_y + row as f32 * self.cell_h + scroll_offset;
 
         // Corner positions: TL, TR, BR, BL
         let targets = [
@@ -113,7 +113,7 @@ impl CursorAnimator {
         scroll_offset: f32,
     ) {
         let px = pane_x + col as f32 * self.cell_w;
-        let py = pane_y + row as f32 * self.cell_h - scroll_offset;
+        let py = pane_y + row as f32 * self.cell_h + scroll_offset;
         let targets = [
             (px, py),
             (px + self.cell_w, py),

@@ -305,7 +305,7 @@ impl Perform for VtePerformer {
                             grid.cursor_row = 0;
                             grid.cursor_col = 0;
                         }
-                        2004 => {} // Bracketed paste
+                        2004 => { grid.bracketed_paste = true; }
                         _ => {}
                     }
                 }
@@ -315,6 +315,7 @@ impl Perform for VtePerformer {
                     match p {
                         7 => { self.auto_wrap = false; }
                         25 => {} // Hide cursor
+                        2004 => { grid.bracketed_paste = false; }
                         1049 => {
                             // Exit alternate screen
                             for r in 0..rows { grid.clear_line(r); }
