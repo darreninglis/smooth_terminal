@@ -52,6 +52,11 @@ pub struct Renderer {
     pub surface_format: wgpu::TextureFormat,
 
     pub cell_bg_renderer: CellBgRenderer,
+    /// Separate renderer for post-text overlay quads (pane borders).
+    /// Must NOT share a vertex buffer with cell_bg_renderer: wgpu batches all
+    /// write_buffer calls before any GPU draw executes, so multiple writes to
+    /// the same buffer in one frame are collapsed to the last write.
+    pub border_renderer: CellBgRenderer,
     pub text_renderer: PaneTextRenderer,
     pub background_renderer: Option<BackgroundRenderer>,
 
@@ -127,6 +132,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let cell_bg_renderer = CellBgRenderer::new(&device, surface_format);
+        let border_renderer = CellBgRenderer::new(&device, surface_format);
         let mut text_renderer = PaneTextRenderer::new(&device, &queue, surface_format);
 
         // Load background image if configured
@@ -174,6 +180,7 @@ impl Renderer {
             config,
             surface_format,
             cell_bg_renderer,
+            border_renderer,
             text_renderer,
             background_renderer,
             cursor_animators: HashMap::new(),
@@ -364,7 +371,18 @@ impl Renderer {
             drop(grid);
         }
 
-        // ---- Phase 1: Selection highlight quads ----
+        // Border padding: panes that don't start at the window edge have a separator line;
+        // content is inset by BORDER_W + BORDER_PAD so text clears the border visually.
+        const BORDER_W: f32 = 1.0;
+        const BORDER_PAD: f32 = 8.0;
+        const BORDER_TOTAL: f32 = BORDER_W + BORDER_PAD;
+        let content_x = |px: f32| if px > window_rect.x + 0.5 { px + BORDER_TOTAL } else { px };
+        let content_y = |py: f32| if py > window_rect.y + 0.5 { py + BORDER_TOTAL } else { py };
+
+        // ---- Phase 1+2: Selection highlights + cursor block (single batch) ----
+        // CellBgRenderer uses a shared vertex buffer. All write_buffer calls submitted
+        // in one frame are applied before any GPU draw executes, so the last write wins.
+        // Batching selection and cursor into one render call avoids clobbering either.
         let mut bg_vertices: Vec<CellBgVertex> = Vec::new();
 
         if let Some((sel_pane_id, sel)) = selection {
@@ -385,6 +403,7 @@ impl Renderer {
                         let sel_color = [0.3_f32, 0.5, 0.9, 0.4];
                         let (start, end) = sel.normalized();
                         let total_rows = scrollback_len + visible_rows;
+                        let cx = content_x(pane_rect.x);
 
                         for abs_row in start.0..=end.0.min(total_rows.saturating_sub(1)) {
                             let row_idx = abs_row as f32 - scrollback_len as f32;
@@ -400,7 +419,7 @@ impl Renderer {
                             let col_end = col_end.min(cols.saturating_sub(1));
 
                             for col in col_start..=col_end {
-                                let x = pane_rect.x + col as f32 * cell_w;
+                                let x = cx + col as f32 * cell_w;
                                 let verts = cell_quad_vertices(
                                     x, y, cell_w, cell_h,
                                     sel_color,
@@ -417,6 +436,13 @@ impl Renderer {
             }
         }
 
+        // Cursor block — appended to the same batch to avoid a separate write_buffer call.
+        let focused_id = pane_tree.focused_id;
+        if let Some(anim) = self.cursor_animators.get(&focused_id) {
+            let verts = anim.build_vertices(surface_w, surface_h);
+            bg_vertices.extend_from_slice(&verts);
+        }
+
         let quad_count = bg_vertices.len() / 4;
         if quad_count > 0 {
             self.cell_bg_renderer.render(
@@ -424,22 +450,10 @@ impl Renderer {
             );
         }
 
-        // ---- Phase 2: Cursor pass ----
-        let focused_id = pane_tree.focused_id;
-        if let Some(anim) = self.cursor_animators.get(&focused_id) {
-            anim.render(
-                &mut encoder,
-                &view,
-                &self.queue,
-                &self.cell_bg_renderer,
-                surface_w,
-                surface_h,
-            );
-        }
-
         // ---- Phase 3b: Build TextAreas from the caches ----
-        // y formula: y = pane_rect.y + row_idx * cell_h + scroll_offset
+        // y formula: y = cy + row_idx * cell_h + scroll_offset
         // (scroll_offset > 0 → content moves down to reveal scrollback from top)
+        // cx/cy are the content-inset origins accounting for any left/top border padding.
         let default_color = to_glyphon_color(fg_color);
         let mut text_areas: Vec<TextArea> = Vec::new();
 
@@ -449,9 +463,12 @@ impl Renderer {
                 .map(|s| s.pixel_offset())
                 .unwrap_or(0.0);
 
+            let cx = content_x(pane_rect.x);
+            let cy = content_y(pane_rect.y);
+
             let bounds = TextBounds {
-                left: pane_rect.x as i32,
-                top: pane_rect.y as i32,
+                left: cx as i32,
+                top: cy as i32,
                 right: (pane_rect.x + pane_rect.width) as i32,
                 bottom: (pane_rect.y + pane_rect.height) as i32,
             };
@@ -459,11 +476,11 @@ impl Renderer {
             // Visible rows
             if let Some((_, span_buffers)) = self.text_cache.get(pane_id) {
                 for sb in span_buffers {
-                    let y = pane_rect.y + sb.row_idx as f32 * cell_h + scroll_offset;
+                    let y = cy + sb.row_idx as f32 * cell_h + scroll_offset;
                     if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                         continue;
                     }
-                    let x = pane_rect.x + sb.col_start as f32 * cell_w + sb.x_offset;
+                    let x = cx + sb.col_start as f32 * cell_w + sb.x_offset;
                     text_areas.push(TextArea {
                         buffer: &sb.buffer,
                         left: x,
@@ -480,11 +497,11 @@ impl Renderer {
             if scroll_offset > 0.5 {
                 if let Some((_, sb_buffers)) = self.scrollback_text_cache.get(pane_id) {
                     for sb in sb_buffers {
-                        let y = pane_rect.y + sb.row_idx as f32 * cell_h + scroll_offset;
+                        let y = cy + sb.row_idx as f32 * cell_h + scroll_offset;
                         if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                             continue;
                         }
-                        let x = pane_rect.x + sb.col_start as f32 * cell_w + sb.x_offset;
+                        let x = cx + sb.col_start as f32 * cell_w + sb.x_offset;
                         text_areas.push(TextArea {
                             buffer: &sb.buffer,
                             left: x,
@@ -523,6 +540,40 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             let _ = self.text_renderer.render(&mut pass);
+        }
+
+        // ---- Phase 4: Pane separator borders ----
+        if layout_rects.len() > 1 {
+            let border_color = [fg_color[0] * 0.4, fg_color[1] * 0.4, fg_color[2] * 0.4, 0.4];
+            let mut border_verts: Vec<CellBgVertex> = Vec::new();
+
+            for (_, pane_rect) in &layout_rects {
+                if pane_rect.x > window_rect.x + 0.5 {
+                    let verts = cell_quad_vertices(
+                        pane_rect.x, pane_rect.y,
+                        BORDER_W, pane_rect.height,
+                        border_color,
+                        surface_w, surface_h,
+                    );
+                    border_verts.extend_from_slice(&verts);
+                }
+                if pane_rect.y > window_rect.y + 0.5 {
+                    let verts = cell_quad_vertices(
+                        pane_rect.x, pane_rect.y,
+                        pane_rect.width, BORDER_W,
+                        border_color,
+                        surface_w, surface_h,
+                    );
+                    border_verts.extend_from_slice(&verts);
+                }
+            }
+
+            let quad_count = border_verts.len() / 4;
+            if quad_count > 0 {
+                self.border_renderer.render(
+                    &mut encoder, &view, &self.queue, &border_verts, quad_count,
+                );
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
