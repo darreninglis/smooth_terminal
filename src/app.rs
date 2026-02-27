@@ -672,6 +672,8 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let (cw, ch) = state.cell_dims();
                             let _ = state.pane_tree.split_horizontal(cw, ch, rect);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
                         }
                     }
                     InputAction::SplitVertical => {
@@ -679,6 +681,8 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let (cw, ch) = state.cell_dims();
                             let _ = state.pane_tree.split_vertical(cw, ch, rect);
+                            let rects = state.pane_tree.layout.compute_rects(rect);
+                            state.pane_tree.resize_panes(&rects, cw, ch);
                         }
                     }
                     InputAction::ClosePane => {
@@ -686,6 +690,12 @@ impl ApplicationHandler for App {
                             self.windows.get_mut(&window_id)
                         {
                             state.pane_tree.close_focused();
+                            if !state.pane_tree.panes.is_empty() {
+                                let rect = state.content_rect(&self.config);
+                                let (cw, ch) = state.cell_dims();
+                                let rects = state.pane_tree.layout.compute_rects(rect);
+                                state.pane_tree.resize_panes(&rects, cw, ch);
+                            }
                             state.pane_tree.panes.is_empty()
                         } else {
                             false
@@ -1000,6 +1010,7 @@ impl ApplicationHandler for App {
 
                     // Auto-close panes whose shell has exited
                     let dead = state.pane_tree.dead_pane_ids();
+                    let had_dead = !dead.is_empty();
                     for id in dead {
                         state.pane_tree.close_pane(id);
                     }
@@ -1017,6 +1028,10 @@ impl ApplicationHandler for App {
                     // Update cursor spring targets
                     let rect = state.content_rect(&self.config);
                     let layout_rects = state.pane_tree.layout.compute_rects(rect);
+                    if had_dead {
+                        let (cw, ch) = state.cell_dims();
+                        state.pane_tree.resize_panes(&layout_rects, cw, ch);
+                    }
                     for (pane_id, pane_rect) in &layout_rects {
                         if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == *pane_id) {
                             let grid = pane.terminal.grid.lock();
