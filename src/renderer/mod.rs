@@ -599,7 +599,16 @@ impl Renderer {
             if anim.is_warming_up() {
                 anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
             } else if anim.target_col != col || anim.target_row != row {
-                anim.move_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+                // If the rendered cursor is more than one cell behind the new
+                // target the spring is lagging (fast typing). Snap immediately
+                // so text never appears ahead of the cursor.
+                let rendered_x = anim.corners[0].x.position;
+                let new_target_x = pane_rect.x + col as f32 * self.cell_w;
+                if (rendered_x - new_target_x).abs() > self.cell_w {
+                    anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+                } else {
+                    anim.move_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+                }
             }
         }
     }
