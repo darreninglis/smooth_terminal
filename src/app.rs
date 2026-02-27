@@ -216,6 +216,9 @@ impl App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let window_id = window.id();
 
+        // Enable IME so macOS text input and candidate windows work correctly.
+        window.set_ime_allowed(true);
+
         let renderer = Renderer::new(window.clone(), config.clone());
         let (cell_w, cell_h) = (renderer.cell_w, renderer.cell_h);
         let scale = window.scale_factor() as f32;
@@ -1034,19 +1037,57 @@ impl ApplicationHandler for App {
                     }
                     for (pane_id, pane_rect) in &layout_rects {
                         if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == *pane_id) {
-                            let grid = pane.terminal.grid.lock();
+                            let mut grid = pane.terminal.grid.lock();
                             let col = grid.cursor_col;
                             let row = grid.cursor_row;
                             let cursor_visible = grid.cursor_visible;
+
+                            // When the terminal cursor is hidden, TUI apps like
+                            // Claude Code draw their own cursor as a reverse-video
+                            // character (ESC[7m).  Scan the grid each frame to find
+                            // that cell so the GPU-animated cursor can track it.
+                            if !cursor_visible {
+                                grid.detect_reverse_cursor();
+                            } else {
+                                grid.reverse_cursor = None;
+                            }
+                            let reverse_cursor = grid.reverse_cursor;
                             drop(grid);
+
                             // Inset pane_rect by the border+padding offset so the cursor
                             // aligns with the text content origin (mirrors renderer logic).
                             const BORDER_TOTAL: f32 = 9.0; // BORDER_W(1) + BORDER_PAD(8)
                             let cx = if pane_rect.x > rect.x + 0.5 { pane_rect.x + BORDER_TOTAL } else { pane_rect.x };
                             let cy = if pane_rect.y > rect.y + 0.5 { pane_rect.y + BORDER_TOTAL } else { pane_rect.y };
                             let cursor_rect = crate::pane::layout::Rect::new(cx, cy, pane_rect.width, pane_rect.height);
-                            state.renderer.update_cursor_for_pane(*pane_id, col, row, cursor_rect);
+
+                            // Pick the best cursor position source:
+                            //  1. reverse_cursor — detected reverse-video cell (TUI
+                            //     apps that hide DECTCEM and draw their own cursor)
+                            //  2. grid cursor — used when cursor_visible is true
+                            //     (normal shell, or any app that shows the cursor)
+                            let (eff_col, eff_row) = reverse_cursor
+                                .map(|(r, c)| (c, r))
+                                .unwrap_or((col, row));
+
+                            if reverse_cursor.is_some() || cursor_visible {
+                                state.renderer.update_cursor_for_pane(*pane_id, eff_col, eff_row, cursor_rect);
+                            }
                             state.renderer.set_cursor_visible(*pane_id, cursor_visible);
+
+                            // Update IME cursor area for the focused pane so macOS
+                            // positions the input method candidate window correctly.
+                            if *pane_id == state.pane_tree.focused_id {
+                                let scale = state.window.scale_factor() as f32;
+                                let ime_x = (cx + eff_col as f32 * state.renderer.cell_w) / scale;
+                                let ime_y = (cy + eff_row as f32 * state.renderer.cell_h) / scale;
+                                let ime_w = (state.renderer.cell_w / scale).max(1.0);
+                                let ime_h = (state.renderer.cell_h / scale).max(1.0);
+                                state.window.set_ime_cursor_area(
+                                    winit::dpi::LogicalPosition::new(ime_x, ime_y),
+                                    winit::dpi::LogicalSize::new(ime_w, ime_h),
+                                );
+                            }
                         }
                     }
 

@@ -24,6 +24,12 @@ pub struct TerminalGrid {
     /// the terminal cursor and draw their own; we must respect this so our
     /// animated cursor doesn't render in the wrong place.
     pub cursor_visible: bool,
+    /// Reverse-video cursor position detected by scanning the grid.
+    /// TUI apps like Claude Code hide the terminal cursor permanently and
+    /// draw their own cursor as a single reverse-video (`ESC[7m`) character.
+    /// Each frame we scan the visible cells to find that character and report
+    /// its position so the GPU-animated cursor can track it.
+    pub reverse_cursor: Option<(usize, usize)>,
 }
 
 impl TerminalGrid {
@@ -45,6 +51,7 @@ impl TerminalGrid {
             generation: 0,
             bracketed_paste: false,
             cursor_visible: true,
+            reverse_cursor: None,
         }
     }
 
@@ -204,6 +211,37 @@ impl TerminalGrid {
 
     pub fn total_rows(&self) -> usize {
         self.scrollback.len() + self.rows
+    }
+
+    /// Scan visible cells for a TUI-drawn cursor (single reverse-video cell).
+    /// Claude Code / Ink draws its cursor as one character with `ESC[7m`
+    /// (reverse attribute).  We look for the *last* row that contains exactly
+    /// one isolated reverse-video cell — that is the text-input cursor.
+    /// Updates `self.reverse_cursor` in place.
+    pub fn detect_reverse_cursor(&mut self) {
+        // Scan bottom-up: the input area is usually in the lower portion.
+        for row in (0..self.rows).rev() {
+            let mut rev_col: Option<usize> = None;
+            let mut rev_count: usize = 0;
+            for col in 0..self.cols {
+                if self.cells[row][col].attrs.reverse {
+                    if rev_count == 0 {
+                        rev_col = Some(col);
+                    }
+                    rev_count += 1;
+                    // More than a handful of reverse cells means this is a
+                    // header / status bar, not a cursor.  Skip the row.
+                    if rev_count > 3 {
+                        break;
+                    }
+                }
+            }
+            if rev_count >= 1 && rev_count <= 3 {
+                self.reverse_cursor = rev_col.map(|c| (row, c));
+                return;
+            }
+        }
+        self.reverse_cursor = None;
     }
 
     /// Extract text for a selection range.

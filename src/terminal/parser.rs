@@ -171,8 +171,8 @@ impl Perform for VtePerformer {
                 grid.cursor_col = 0;
                 grid.pending_wrap = false;
             }
-            // Cursor Horizontal Absolute
-            (None, 'G') => {
+            // Cursor Horizontal Absolute (CHA)
+            (None, 'G') | (None, '`') => {
                 let n = ps.first().copied().unwrap_or(1).max(1) as usize;
                 grid.cursor_col = (n - 1).min(cols - 1);
                 grid.pending_wrap = false;
@@ -256,6 +256,64 @@ impl Perform for VtePerformer {
                 let end = (cc + n).min(cols);
                 grid.clear_line_range(cr, cc, end);
             }
+            // Insert Characters (ICH)
+            (None, '@') => {
+                let n = ps.first().copied().unwrap_or(1).max(1) as usize;
+                let cr = grid.cursor_row;
+                let cc = grid.cursor_col;
+                let shift = n.min(cols - cc);
+                let row = &mut grid.cells[cr];
+                // Shift existing characters right to make room
+                for i in (cc + shift..cols).rev() {
+                    row[i] = row[i - shift].clone();
+                }
+                // Clear the inserted positions
+                for i in cc..(cc + shift).min(cols) {
+                    row[i] = Cell::default();
+                }
+                grid.generation = grid.generation.wrapping_add(1);
+            }
+            // Vertical Position Absolute (VPA) — CSI Pn d
+            // Moves cursor to absolute row Pn (1-based) without changing column.
+            // Used heavily by TUI frameworks (Ink/Claude Code) to position the
+            // cursor at the input-box row after rendering the full UI.
+            (None, 'd') => {
+                let n = ps.first().copied().unwrap_or(1).max(1) as usize;
+                grid.cursor_row = (n - 1).min(rows - 1);
+                grid.pending_wrap = false;
+            }
+            // Horizontal Position Relative (HPR) — CSI Pn a
+            (None, 'a') => {
+                let n = ps.first().copied().unwrap_or(1).max(1) as usize;
+                grid.cursor_col = (grid.cursor_col + n).min(cols - 1);
+                grid.pending_wrap = false;
+            }
+            // Vertical Position Relative (VPR) — CSI Pn e
+            (None, 'e') => {
+                let n = ps.first().copied().unwrap_or(1).max(1) as usize;
+                grid.cursor_row = (grid.cursor_row + n).min(rows - 1);
+                grid.pending_wrap = false;
+            }
+            // Repeat preceding graphic character (REP) — CSI Pn b
+            (None, 'b') => {
+                let n = ps.first().copied().unwrap_or(1).max(1) as usize;
+                // Repeat the character in the cell just before the cursor
+                let ch = if grid.cursor_col > 0 {
+                    grid.cells[grid.cursor_row][grid.cursor_col - 1].ch
+                } else {
+                    ' '
+                };
+                if ch != '\0' {
+                    for _ in 0..n {
+                        let col = grid.cursor_col;
+                        let row = grid.cursor_row;
+                        if col < cols {
+                            grid.set_cell(col, row, ch);
+                            grid.advance_cursor();
+                        }
+                    }
+                }
+            }
             // Scroll Up
             (None, 'S') => {
                 let n = ps.first().copied().unwrap_or(1).max(1) as usize;
@@ -300,10 +358,14 @@ impl Perform for VtePerformer {
                         7 => { self.auto_wrap = true; }
                         25 => { grid.cursor_visible = true; }
                         1049 => {
-                            // Alternate screen — just clear
+                            // Alternate screen: save cursor, clear, reset margins
+                            self.saved_cursor = Some((grid.cursor_row, grid.cursor_col));
                             for r in 0..rows { grid.clear_line(r); }
                             grid.cursor_row = 0;
                             grid.cursor_col = 0;
+                            grid.scroll_top = 0;
+                            grid.scroll_bottom = rows.saturating_sub(1);
+                            grid.pending_wrap = false;
                         }
                         2004 => { grid.bracketed_paste = true; }
                         _ => {}
@@ -317,10 +379,18 @@ impl Perform for VtePerformer {
                         25 => { grid.cursor_visible = false; }
                         2004 => { grid.bracketed_paste = false; }
                         1049 => {
-                            // Exit alternate screen
+                            // Exit alternate screen: clear, restore cursor & margins
                             for r in 0..rows { grid.clear_line(r); }
-                            grid.cursor_row = 0;
-                            grid.cursor_col = 0;
+                            if let Some((row, col)) = self.saved_cursor {
+                                grid.cursor_row = row.min(rows - 1);
+                                grid.cursor_col = col.min(cols - 1);
+                            } else {
+                                grid.cursor_row = 0;
+                                grid.cursor_col = 0;
+                            }
+                            grid.scroll_top = 0;
+                            grid.scroll_bottom = rows.saturating_sub(1);
+                            grid.pending_wrap = false;
                         }
                         _ => {}
                     }

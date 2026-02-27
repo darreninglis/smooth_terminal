@@ -439,16 +439,16 @@ impl Renderer {
             }
         }
 
-        // Cursor block — appended to the same batch to avoid a separate write_buffer call.
-        // Only render when the cursor is visible (DECTCEM). TUI apps like Claude Code
-        // hide the terminal cursor and draw their own as styled text.
+        // Cursor block — always rendered for the focused pane.
+        // All PTY output is drained before rendering, so by this point the
+        // cursor position is stable (at the input area, not mid-render-cycle).
+        // We ignore DECTCEM (cursor_visible) because TUI apps like Claude Code
+        // hide the terminal cursor to draw their own styled text cursor, but we
+        // want our GPU-animated cursor to always appear at the active position.
         let focused_id = pane_tree.focused_id;
-        let cursor_vis = self.cursor_visible.get(&focused_id).copied().unwrap_or(true);
-        if cursor_vis {
-            if let Some(anim) = self.cursor_animators.get(&focused_id) {
-                let verts = anim.build_vertices(surface_w, surface_h);
-                bg_vertices.extend_from_slice(&verts);
-            }
+        if let Some(anim) = self.cursor_animators.get(&focused_id) {
+            let verts = anim.build_vertices(surface_w, surface_h);
+            bg_vertices.extend_from_slice(&verts);
         }
 
         let quad_count = bg_vertices.len() / 4;
