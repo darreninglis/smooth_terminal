@@ -156,7 +156,7 @@ impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
             target_fps: 120,
-            cursor_spring_frequency: 12.0,
+            cursor_spring_frequency: 8.0,
             scroll_spring_frequency: 15.0,
             cursor_trail_enabled: true,
         }

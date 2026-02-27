@@ -607,15 +607,23 @@ impl Renderer {
             if anim.is_warming_up() {
                 anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
             } else if anim.target_col != col || anim.target_row != row {
-                // If the rendered cursor is more than one cell behind the new
-                // target the spring is lagging (fast typing). Snap immediately
-                // so text never appears ahead of the cursor.
+                // Only snap for large jumps (>5 cells in either axis) so the
+                // spring can animate smoothly during normal typing and small
+                // cursor movements. Big jumps (page up/down, search, etc.)
+                // still snap to avoid a long slide across the screen.
                 let rendered_x = anim.corners[0].x.position;
+                let rendered_y = anim.corners[0].y.position;
                 let new_target_x = pane_rect.x + col as f32 * self.cell_w;
-                if (rendered_x - new_target_x).abs() > self.cell_w {
+                let new_target_y = pane_rect.y + row as f32 * self.cell_h + scroll_offset;
+                let dx = (rendered_x - new_target_x).abs();
+                let dy = (rendered_y - new_target_y).abs();
+                if dx > self.cell_w * 5.0 || dy > self.cell_h * 5.0 {
                     anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
                 } else {
                     anim.move_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+                    // Keep the cursor within 1 cell of the target so it never
+                    // visibly lags behind typed text during fast input.
+                    anim.clamp_lag(self.cell_w, self.cell_h);
                 }
             }
         }

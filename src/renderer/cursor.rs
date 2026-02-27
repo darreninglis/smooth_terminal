@@ -103,6 +103,23 @@ impl CursorAnimator {
         }
     }
 
+    /// Clamp each corner so it never lags more than `max_x`/`max_y` pixels
+    /// behind its target. Preserves velocity so the spring still animates
+    /// smoothly from the clamped position — the cursor glides rather than
+    /// teleporting, but never falls visibly behind during fast typing.
+    pub fn clamp_lag(&mut self, max_x: f32, max_y: f32) {
+        for corner in &mut self.corners {
+            let dx = corner.x.position - corner.x.target;
+            if dx.abs() > max_x {
+                corner.x.position = corner.x.target + dx.signum() * max_x;
+            }
+            let dy = corner.y.position - corner.y.target;
+            if dy.abs() > max_y {
+                corner.y.position = corner.y.target + dy.signum() * max_y;
+            }
+        }
+    }
+
     /// Snap all corners to current target (no animation — use on init/resize)
     pub fn snap_to(
         &mut self,
