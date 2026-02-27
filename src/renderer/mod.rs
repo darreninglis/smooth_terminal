@@ -61,6 +61,8 @@ pub struct Renderer {
     pub background_renderer: Option<BackgroundRenderer>,
 
     pub cursor_animators: HashMap<usize, CursorAnimator>,
+    /// Per-pane cursor visibility (DECTCEM). TUI apps hide the terminal cursor.
+    pub cursor_visible: HashMap<usize, bool>,
     pub scroll_springs: HashMap<usize, ScrollSpring>,
     /// Per-pane visible span-buffer cache. Key = pane_id, Value = (grid generation, buffers).
     text_cache: HashMap<usize, (u64, Vec<SpanBuffer>)>,
@@ -184,6 +186,7 @@ impl Renderer {
             text_renderer,
             background_renderer,
             cursor_animators: HashMap::new(),
+            cursor_visible: HashMap::new(),
             scroll_springs: HashMap::new(),
             text_cache: HashMap::new(),
             scrollback_text_cache: HashMap::new(),
@@ -437,10 +440,15 @@ impl Renderer {
         }
 
         // Cursor block — appended to the same batch to avoid a separate write_buffer call.
+        // Only render when the cursor is visible (DECTCEM). TUI apps like Claude Code
+        // hide the terminal cursor and draw their own as styled text.
         let focused_id = pane_tree.focused_id;
-        if let Some(anim) = self.cursor_animators.get(&focused_id) {
-            let verts = anim.build_vertices(surface_w, surface_h);
-            bg_vertices.extend_from_slice(&verts);
+        let cursor_vis = self.cursor_visible.get(&focused_id).copied().unwrap_or(true);
+        if cursor_vis {
+            if let Some(anim) = self.cursor_animators.get(&focused_id) {
+                let verts = anim.build_vertices(surface_w, surface_h);
+                bg_vertices.extend_from_slice(&verts);
+            }
         }
 
         let quad_count = bg_vertices.len() / 4;
@@ -647,6 +655,10 @@ impl Renderer {
         self.scrollback_text_cache.clear();
 
         metrics_changed
+    }
+
+    pub fn set_cursor_visible(&mut self, pane_id: usize, visible: bool) {
+        self.cursor_visible.insert(pane_id, visible);
     }
 
     pub fn snap_cursor_for_pane(

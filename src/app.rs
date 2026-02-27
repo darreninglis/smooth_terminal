@@ -1037,6 +1037,7 @@ impl ApplicationHandler for App {
                             let grid = pane.terminal.grid.lock();
                             let col = grid.cursor_col;
                             let row = grid.cursor_row;
+                            let cursor_visible = grid.cursor_visible;
                             drop(grid);
                             // Inset pane_rect by the border+padding offset so the cursor
                             // aligns with the text content origin (mirrors renderer logic).
@@ -1045,6 +1046,7 @@ impl ApplicationHandler for App {
                             let cy = if pane_rect.y > rect.y + 0.5 { pane_rect.y + BORDER_TOTAL } else { pane_rect.y };
                             let cursor_rect = crate::pane::layout::Rect::new(cx, cy, pane_rect.width, pane_rect.height);
                             state.renderer.update_cursor_for_pane(*pane_id, col, row, cursor_rect);
+                            state.renderer.set_cursor_visible(*pane_id, cursor_visible);
                         }
                     }
 

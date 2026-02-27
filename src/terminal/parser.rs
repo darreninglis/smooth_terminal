@@ -298,7 +298,7 @@ impl Perform for VtePerformer {
                     match p {
                         1 => {} // DECCKM — application cursor keys (ignore for now)
                         7 => { self.auto_wrap = true; }
-                        25 => {} // Show cursor
+                        25 => { grid.cursor_visible = true; }
                         1049 => {
                             // Alternate screen — just clear
                             for r in 0..rows { grid.clear_line(r); }
@@ -314,7 +314,7 @@ impl Perform for VtePerformer {
                 for p in &ps {
                     match p {
                         7 => { self.auto_wrap = false; }
-                        25 => {} // Hide cursor
+                        25 => { grid.cursor_visible = false; }
                         2004 => { grid.bracketed_paste = false; }
                         1049 => {
                             // Exit alternate screen

@@ -20,6 +20,10 @@ pub struct TerminalGrid {
     pub generation: u64,
     /// Whether bracketed paste mode (DEC mode 2004) is active.
     pub bracketed_paste: bool,
+    /// Whether the cursor is visible (DECTCEM / DEC mode 25). TUI apps hide
+    /// the terminal cursor and draw their own; we must respect this so our
+    /// animated cursor doesn't render in the wrong place.
+    pub cursor_visible: bool,
 }
 
 impl TerminalGrid {
@@ -40,6 +44,7 @@ impl TerminalGrid {
             pending_wrap: false,
             generation: 0,
             bracketed_paste: false,
+            cursor_visible: true,
         }
     }
 
