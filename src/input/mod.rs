@@ -97,6 +97,10 @@ pub fn handle_key_event(
                     }
                 }
             }
+            // Ctrl+F: maximize window (fn+Ctrl+F on macOS)
+            if ctrl && !shift && !cmd && !alt && lc == "f" {
+                return InputAction::Maximize;
+            }
             // Pass character to PTY
             if cmd {
                 return InputAction::None; // Don't pass Cmd shortcuts to shell
