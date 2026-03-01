@@ -1186,7 +1186,7 @@ impl ApplicationHandler for App {
                     let focused = state.pane_tree.focused_id;
                     state.renderer.ensure_pane_state(focused);
                     if let Some(spring) = state.renderer.scroll_springs.get_mut(&focused) {
-                        spring.scroll_by(-dy);
+                        spring.scroll_by(dy);
                     }
                 }
             }
