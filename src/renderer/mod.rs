@@ -4,7 +4,7 @@ pub mod cursor;
 pub mod text_renderer;
 
 use crate::animation::scroll::ScrollSpring;
-use crate::config::{parse_hex_color, Config};
+use crate::config::{parse_hex_color, srgb_to_linear, Config};
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::background::BackgroundRenderer;
@@ -211,7 +211,7 @@ impl Renderer {
         let cursor_freq = self.app_config.animation.cursor_spring_frequency;
         let scroll_freq = self.app_config.animation.scroll_spring_frequency;
         let cursor_color = parse_hex_color(&self.app_config.colors.cursor)
-            .unwrap_or([0.96, 0.76, 0.91, 1.0]);
+            .unwrap_or([0.75, 0.0, 1.0, 1.0]);
         let trail = self.app_config.animation.cursor_trail_enabled;
 
         self.cursor_animators.entry(pane_id).or_insert_with(|| {
@@ -639,6 +639,12 @@ impl Renderer {
         let metrics_changed = font_changed || scale_changed;
 
         self.app_config = new_config;
+
+        let cursor_color = parse_hex_color(&self.app_config.colors.cursor)
+            .unwrap_or([0.75, 0.0, 1.0, 1.0]);
+        for anim in self.cursor_animators.values_mut() {
+            anim.color = cursor_color;
+        }
 
         if metrics_changed {
             let font_size_px = self.app_config.font.size * scale_factor;

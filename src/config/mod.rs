@@ -107,7 +107,7 @@ impl Default for ColorsConfig {
         Self {
             background: "#000000".to_string(),
             foreground: "#ffffff".to_string(),
-            cursor: "#f5c2e7".to_string(),
+            cursor: "#bf00ff".to_string(),
             black: default_black(),
             red: default_red(),
             green: default_green(),
@@ -248,6 +248,15 @@ impl Config {
         }
         OPEN_CONFIG_REQUESTED.store(true, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+/// Convert a single sRGB component (0..1) to linear light.
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
