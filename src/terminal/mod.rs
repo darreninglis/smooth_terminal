@@ -2,6 +2,7 @@ pub mod cell;
 pub mod grid;
 pub mod parser;
 pub mod pty;
+pub mod url;
 
 use anyhow::Result;
 use parking_lot::Mutex;

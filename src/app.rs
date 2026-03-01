@@ -4,6 +4,7 @@ use crate::pane::Direction;
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::{Renderer, Selection};
+use crate::terminal::url::detect_urls;
 use crossbeam_channel::Receiver;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
@@ -87,6 +88,8 @@ struct WindowState {
     selection_pane: usize,
     /// True while the left mouse button is held down (for drag selection).
     mouse_button_down: bool,
+    /// Currently hovered URL: (pane_id, abs_row, col_start, col_end_exclusive, url_string)
+    hovered_url: Option<(usize, usize, usize, usize, String)>,
 }
 
 impl WindowState {
@@ -164,6 +167,33 @@ impl WindowState {
         Some((abs_row, col))
     }
 
+    /// Check if a URL exists at the given cell position in a pane.
+    /// Returns (col_start, col_end_exclusive, url_string) if found.
+    fn url_at_cell(&self, pane_id: usize, abs_row: usize, col: usize) -> Option<(usize, usize, String)> {
+        let pane = self.pane_tree.panes.iter().find(|p| p.id == pane_id)?;
+        let grid = pane.terminal.grid.lock();
+        let scrollback_len = grid.scrollback.len();
+
+        let row_cells = if abs_row < scrollback_len {
+            &grid.scrollback[abs_row]
+        } else {
+            let vis_row = abs_row - scrollback_len;
+            if vis_row < grid.cells.len() {
+                &grid.cells[vis_row]
+            } else {
+                return None;
+            }
+        };
+
+        let urls = detect_urls(row_cells);
+        for (start, end, url) in urls {
+            if col >= start && col < end {
+                return Some((start, end, url));
+            }
+        }
+        None
+    }
+
     /// Write input bytes to the focused pane and snap scroll to bottom.
     fn write_to_focused_pane(&mut self, bytes: &[u8]) {
         if let Some(pane) = self.pane_tree.focused_pane_mut() {
@@ -185,6 +215,9 @@ pub struct App {
     config: Config,
     // The first window ID is used as the "primary" for initial setup
     first_window_id: Option<WindowId>,
+    // Windows to remove after the current event batch (deferred to avoid
+    // dropping the winit Window while macOS still has pending events for it).
+    pending_close: Vec<WindowId>,
     // Retained NSEvent monitor for double-click tab renaming (macOS only).
     #[cfg(target_os = "macos")]
     _event_monitor: Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
@@ -196,6 +229,7 @@ impl App {
             windows: HashMap::new(),
             config,
             first_window_id: None,
+            pending_close: Vec::new(),
             #[cfg(target_os = "macos")]
             _event_monitor: None,
         }
@@ -264,6 +298,7 @@ impl App {
             selection: None,
             selection_pane: 0,
             mouse_button_down: false,
+            hovered_url: None,
         };
 
         (window_id, state)
@@ -586,6 +621,125 @@ unsafe fn macos_show_rename_dialog(ns_window: &objc2::runtime::AnyObject) {
     }
 }
 
+/// Swizzle WinitView's mouse-event methods to guard against a winit bug
+/// where `self.window()` panics (via `expect`) when the view's weak
+/// NSWindow reference is nil.  This can happen during window close
+/// transitions, app activation changes, or native tab operations.
+///
+/// The replacement checks `[view window]` first; if nil, the event is
+/// silently dropped instead of panicking across the extern "C" boundary.
+#[cfg(target_os = "macos")]
+fn install_mouse_moved_guard() {
+    use std::sync::Once;
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        unsafe {
+            // WinitView is a private class registered by winit at runtime.
+            // Use objc_getClass (raw FFI) to look it up.
+            let cls = objc_getClass(c"WinitView".as_ptr());
+            if cls.is_null() {
+                eprintln!("[mouse-guard] WinitView class not found");
+                return;
+            }
+            eprintln!("[mouse-guard] Found WinitView class at {:?}", cls);
+
+            // Selectors to guard — all mouse-movement variants.
+            let sel_names: &[&std::ffi::CStr] = &[
+                c"mouseMoved:",
+                c"mouseDragged:",
+                c"rightMouseMoved:",
+                c"rightMouseDragged:",
+                c"otherMouseMoved:",
+                c"otherMouseDragged:",
+                c"mouseEntered:",
+                c"mouseExited:",
+            ];
+
+            for name in sel_names {
+                let sel = sel_registerName(name.as_ptr());
+                if sel.is_null() {
+                    continue;
+                }
+                let method = class_getInstanceMethod(cls, sel);
+                if method.is_null() {
+                    eprintln!("[mouse-guard] No method for {:?}", name);
+                    continue;
+                }
+                let orig_imp = method_getImplementation(method);
+                if orig_imp.is_null() {
+                    continue;
+                }
+
+                // Store original IMP keyed by selector address.
+                ORIGINAL_IMPS
+                    .lock()
+                    .unwrap()
+                    .push((sel as usize, orig_imp as usize));
+
+                let old = method_setImplementation(method, guarded_mouse_handler as *const _);
+                eprintln!(
+                    "[mouse-guard] Swizzled {:?}: old={:?} new={:?}",
+                    name,
+                    old,
+                    guarded_mouse_handler as *const ()
+                );
+            }
+        }
+    });
+}
+
+/// Original IMPs stored by selector address.
+/// We store as usize (transmuted from fn pointer) to keep Send+Sync.
+#[cfg(target_os = "macos")]
+static ORIGINAL_IMPS: std::sync::Mutex<Vec<(usize, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Replacement IMP: checks `[self window]` before calling original.
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn guarded_mouse_handler(
+    this: *mut std::ffi::c_void,  // id (self)
+    cmd: *const std::ffi::c_void, // SEL (_cmd)
+    event: *mut std::ffi::c_void, // NSEvent*
+) {
+    // [self window] — returns nil if the view has been detached.
+    let window_sel = sel_registerName(c"window".as_ptr());
+    let window: *const std::ffi::c_void = objc_msgSend(this, window_sel);
+    if window.is_null() {
+        return; // View is detached — silently drop the event.
+    }
+
+    // Look up the original IMP for this selector.
+    type MouseImp = unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, *mut std::ffi::c_void);
+    let orig_usize = {
+        let imps = ORIGINAL_IMPS.lock().unwrap();
+        imps.iter()
+            .find(|(s, _)| *s == cmd as usize)
+            .map(|(_, imp)| *imp)
+    };
+    if let Some(imp) = orig_usize {
+        let f: MouseImp = std::mem::transmute(imp);
+        f(this, cmd, event);
+    }
+}
+
+// Raw ObjC runtime FFI.
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+    fn sel_registerName(name: *const std::ffi::c_char) -> *const std::ffi::c_void;
+    fn class_getInstanceMethod(
+        cls: *mut std::ffi::c_void,
+        sel: *const std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+    fn method_getImplementation(method: *mut std::ffi::c_void) -> *const ();
+    fn method_setImplementation(
+        method: *mut std::ffi::c_void,
+        imp: *const (),
+    ) -> *const ();
+    fn objc_msgSend(receiver: *mut std::ffi::c_void, sel: *const std::ffi::c_void, ...) -> *const std::ffi::c_void;
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (window_id, state) = Self::create_window_state(event_loop, &self.config);
@@ -594,13 +748,26 @@ impl ApplicationHandler for App {
         {
             crate::menubar::setup_menubar();
             self._event_monitor = Self::install_tab_rename_monitor();
+            // Swizzle winit's WinitView mouseMoved: to guard against panics
+            // when the view's window weak reference is nil (winit bug).
+            install_mouse_moved_guard();
         }
 
         self.first_window_id = Some(window_id);
         self.windows.insert(window_id, state);
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Drain deferred window removals (we defer so that the winit NSView
+        // isn't dropped while macOS still has pending events targeting it).
+        for wid in self.pending_close.drain(..) {
+            self.windows.remove(&wid);
+        }
+        if self.windows.is_empty() {
+            event_loop.exit();
+            return;
+        }
+
         let fps = self.config.animation.target_fps.max(1) as u64;
         let frame_interval = std::time::Duration::from_millis(1000 / fps);
         let now = Instant::now();
@@ -617,12 +784,21 @@ impl ApplicationHandler for App {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Skip events for windows that are already pending close.
+        if self.pending_close.contains(&window_id) {
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => {
-                self.windows.remove(&window_id);
-                if self.windows.is_empty() {
-                    event_loop.exit();
+                // Hide the window immediately to stop AppKit from routing
+                // mouse events to the winit NSView (which panics in
+                // mouse_moved → scale_factor → window().expect() when the
+                // view's _ns_window atomic has been cleared during teardown).
+                if let Some(state) = self.windows.get(&window_id) {
+                    state.window.set_visible(false);
                 }
+                self.pending_close.push(window_id);
             }
 
             WindowEvent::Resized(new_size) => {
@@ -704,10 +880,10 @@ impl ApplicationHandler for App {
                             false
                         };
                         if should_close_window {
-                            self.windows.remove(&window_id);
-                            if self.windows.is_empty() {
-                                event_loop.exit();
+                            if let Some(state) = self.windows.get(&window_id) {
+                                state.window.set_visible(false);
                             }
+                            self.pending_close.push(window_id);
                         }
                     }
                     InputAction::FocusNext => {
@@ -910,6 +1086,32 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+
+                    // URL hover detection
+                    let (px, py) = state.cursor_pos;
+                    let rect = state.content_rect(&self.config);
+                    let layout_rects = state.pane_tree.layout.compute_rects(rect);
+                    let mut found_url = false;
+                    for (pane_id, pane_rect) in &layout_rects {
+                        if px >= pane_rect.x && px < pane_rect.x + pane_rect.width
+                            && py >= pane_rect.y && py < pane_rect.y + pane_rect.height
+                        {
+                            let pane_rect = *pane_rect;
+                            let pane_id = *pane_id;
+                            if let Some((abs_row, col)) = state.pixel_to_cell(px, py, pane_rect, pane_id) {
+                                if let Some((col_start, col_end, url)) = state.url_at_cell(pane_id, abs_row, col) {
+                                    state.hovered_url = Some((pane_id, abs_row, col_start, col_end, url));
+                                    state.window.set_cursor(winit::window::CursorIcon::Pointer);
+                                    found_url = true;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    if !found_url && state.hovered_url.is_some() {
+                        state.hovered_url = None;
+                        state.window.set_cursor(winit::window::CursorIcon::Default);
+                    }
                 }
             }
 
@@ -960,6 +1162,17 @@ impl ApplicationHandler for App {
                     // Finalize selection: if anchor == head, it's a click (clear selection)
                     if let Some(sel) = &state.selection {
                         if sel.is_empty() {
+                            // It was a click, not a drag — open URL if hovered
+                            if let Some((_, _, _, _, ref url)) = state.hovered_url {
+                                // Open the URL on a background thread so any
+                                // AppKit re-entrant events triggered by the
+                                // focus change don't fire inside winit's
+                                // extern "C" ObjC callback.
+                                let url = url.clone();
+                                std::thread::spawn(move || {
+                                    let _ = std::process::Command::new("open").arg(&url).status();
+                                });
+                            }
                             state.selection = None;
                         }
                     }
@@ -1018,10 +1231,8 @@ impl ApplicationHandler for App {
                         state.pane_tree.close_pane(id);
                     }
                     if state.pane_tree.panes.is_empty() {
-                        self.windows.remove(&window_id);
-                        if self.windows.is_empty() {
-                            event_loop.exit();
-                        }
+                        state.window.set_visible(false);
+                        self.pending_close.push(window_id);
                         return;
                     }
 
@@ -1096,9 +1307,10 @@ impl ApplicationHandler for App {
 
                     // Build selection reference for renderer
                     let sel_ref = state.selection.as_ref().map(|s| (state.selection_pane, s));
+                    let hover_ref = state.hovered_url.as_ref().map(|(pid, row, cs, ce, _)| (*pid, *row, *cs, *ce));
 
                     // Render
-                    match state.renderer.render(&state.pane_tree, rect, sel_ref) {
+                    match state.renderer.render(&state.pane_tree, rect, sel_ref, hover_ref) {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                             let s = state.window.inner_size();

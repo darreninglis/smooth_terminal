@@ -238,6 +238,7 @@ impl Renderer {
         pane_tree: &PaneTree,
         window_rect: Rect,
         selection: Option<(usize, &Selection)>, // (focused_pane_id, selection)
+        hovered_url: Option<(usize, usize, usize, usize)>, // (pane_id, abs_row, col_start, col_end)
     ) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -451,6 +452,41 @@ impl Renderer {
         if let Some(anim) = self.cursor_animators.get(&focused_id) {
             let verts = anim.build_vertices(surface_w, surface_h);
             bg_vertices.extend_from_slice(&verts);
+        }
+
+        // Hovered URL underline
+        if let Some((url_pane_id, url_abs_row, url_col_start, url_col_end)) = hovered_url {
+            if let Some(pane_rect) = layout_rects.iter().find(|(id, _)| *id == url_pane_id).map(|(_, r)| r) {
+                if let Some(pane) = pane_tree.panes.iter().find(|p| p.id == url_pane_id) {
+                    let grid = pane.terminal.grid.lock();
+                    let scrollback_len = grid.scrollback.len();
+                    drop(grid);
+
+                    let scroll_offset = self.scroll_springs
+                        .get(&url_pane_id)
+                        .map(|s| s.pixel_offset())
+                        .unwrap_or(0.0);
+
+                    let row_idx = url_abs_row as f32 - scrollback_len as f32;
+                    let y = pane_rect.y + row_idx * cell_h + scroll_offset;
+                    let underline_h = 2.0_f32;
+                    let underline_y = y + cell_h - underline_h;
+                    let cx = content_x(pane_rect.x);
+                    let underline_color = [fg_color[0], fg_color[1], fg_color[2], 0.6];
+
+                    if underline_y + underline_h >= pane_rect.y && underline_y < pane_rect.y + pane_rect.height {
+                        for col in url_col_start..url_col_end {
+                            let x = cx + col as f32 * cell_w;
+                            let verts = cell_quad_vertices(
+                                x, underline_y, cell_w, underline_h,
+                                underline_color,
+                                surface_w, surface_h,
+                            );
+                            bg_vertices.extend_from_slice(&verts);
+                        }
+                    }
+                }
+            }
         }
 
         let quad_count = bg_vertices.len() / 4;
