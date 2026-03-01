@@ -1062,6 +1062,21 @@ impl ApplicationHandler for App {
                             state.pane_tree.resize_panes(&rects, cw, ch);
                         }
                     }
+                    InputAction::ToggleTheme => {
+                        self.config.toggle_theme();
+                        // Apply to all windows immediately (file watcher will
+                        // also fire, but this avoids a frame delay).
+                        let new_config = self.config.clone();
+                        for state in self.windows.values_mut() {
+                            let scale = state.window.scale_factor() as f32;
+                            let metrics_changed = state.renderer.apply_config(new_config.clone(), scale);
+                            if metrics_changed {
+                                let rect = state.content_rect(&new_config);
+                                let layout_rects = state.pane_tree.layout.compute_rects(rect);
+                                state.pane_tree.resize_panes(&layout_rects, state.renderer.cell_w, state.renderer.cell_h);
+                            }
+                        }
+                    }
                     InputAction::None => {}
                     InputAction::Scroll(_) => {}
                 }

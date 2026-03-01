@@ -32,6 +32,7 @@ pub enum InputAction {
     ResizePaneRight,
     ResizePaneUp,
     ResizePaneDown,
+    ToggleTheme,
     None,
 }
 
@@ -80,6 +81,10 @@ pub fn handle_key_event(
             }
             if cmd && !shift && lc == "n" {
                 return InputAction::NewWindow;
+            }
+            // Cmd+Shift+L: toggle light/dark theme
+            if cmd && shift && !ctrl && lc == "l" {
+                return InputAction::ToggleTheme;
             }
             // Cmd+C: copy selection
             if cmd && !shift && !ctrl && lc == "c" {

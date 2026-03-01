@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Set by `Config::open_in_editor()` (called from ObjC menu handlers that
 /// have no access to `App`).  Polled each frame in the winit event loop.
 pub static OPEN_CONFIG_REQUESTED: AtomicBool = AtomicBool::new(false);
-
 const DEFAULT_CONFIG: &str = include_str!("../../assets/default_config.toml");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,6 +247,80 @@ impl Config {
         }
         OPEN_CONFIG_REQUESTED.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Toggle between dark and light theme by rewriting the [colors] section
+    /// of config.toml.  The file-watcher hot-reload picks up the change.
+    pub fn toggle_theme(&mut self) {
+        let is_dark = is_dark_background(&self.colors.background);
+        if is_dark {
+            self.colors = light_colors();
+        } else {
+            self.colors = dark_colors();
+        }
+        // Write the updated config back to disk
+        if let Ok(toml_str) = toml::to_string_pretty(self) {
+            let path = Self::config_path();
+            let _ = std::fs::write(&path, toml_str);
+        }
+    }
+}
+
+fn is_dark_background(hex: &str) -> bool {
+    if let Some(rgba) = parse_hex_color(hex) {
+        // Luminance: 0.299*R + 0.587*G + 0.114*B
+        let lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
+        lum < 0.5
+    } else {
+        true // assume dark if unparseable
+    }
+}
+
+fn dark_colors() -> ColorsConfig {
+    ColorsConfig {
+        background: "#000000".into(),
+        foreground: "#ffffff".into(),
+        cursor: "#bf00ff".into(),
+        black: "#45475a".into(),
+        red: "#f38ba8".into(),
+        green: "#a6e3a1".into(),
+        yellow: "#f9e2af".into(),
+        blue: "#89b4fa".into(),
+        magenta: "#f5c2e7".into(),
+        cyan: "#94e2d5".into(),
+        white: "#bac2de".into(),
+        bright_black: "#585b70".into(),
+        bright_red: "#f38ba8".into(),
+        bright_green: "#a6e3a1".into(),
+        bright_yellow: "#f9e2af".into(),
+        bright_blue: "#89b4fa".into(),
+        bright_magenta: "#f5c2e7".into(),
+        bright_cyan: "#94e2d5".into(),
+        bright_white: "#a6adc8".into(),
+    }
+}
+
+fn light_colors() -> ColorsConfig {
+    ColorsConfig {
+        background: "#eff1f5".into(),
+        foreground: "#4c4f69".into(),
+        cursor: "#7c3aed".into(),
+        black: "#5c5f77".into(),
+        red: "#d20f39".into(),
+        green: "#40a02b".into(),
+        yellow: "#df8e1d".into(),
+        blue: "#1e66f5".into(),
+        magenta: "#ea76cb".into(),
+        cyan: "#179299".into(),
+        white: "#acb0be".into(),
+        bright_black: "#6c6f85".into(),
+        bright_red: "#d20f39".into(),
+        bright_green: "#40a02b".into(),
+        bright_yellow: "#df8e1d".into(),
+        bright_blue: "#1e66f5".into(),
+        bright_magenta: "#ea76cb".into(),
+        bright_cyan: "#179299".into(),
+        bright_white: "#bcc0cc".into(),
     }
 }
 
