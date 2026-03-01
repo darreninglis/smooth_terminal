@@ -91,6 +91,51 @@ pub struct SpanBuffer {
     pub x_offset: f32,
 }
 
+/// Scan a row of cells for hex color codes (#RRGGBB) and return a map of
+/// column index → RGB color for each character that is part of a hex literal.
+fn detect_hex_colors(row: &[crate::terminal::cell::Cell]) -> Vec<(usize, [f32; 4])> {
+    let mut overrides = Vec::new();
+    let len = row.len();
+    let mut col = 0;
+    while col + 6 < len {
+        if row[col].ch == '#' {
+            // Check if the next 6 chars are hex digits
+            let mut valid = true;
+            let mut hex = [0u8; 6];
+            for i in 0..6 {
+                let ch = row[col + 1 + i].ch;
+                if ch.is_ascii_hexdigit() {
+                    hex[i] = ch as u8;
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                // Also verify the hex code isn't followed by another hex digit
+                // (would mean it's part of a longer hex string, not a color)
+                if col + 7 < len && row[col + 7].ch.is_ascii_hexdigit() {
+                    col += 1;
+                    continue;
+                }
+                // Parse the hex color
+                let hex_str = std::str::from_utf8(&hex).unwrap();
+                let r = u8::from_str_radix(&hex_str[0..2], 16).unwrap();
+                let g = u8::from_str_radix(&hex_str[2..4], 16).unwrap();
+                let b = u8::from_str_radix(&hex_str[4..6], 16).unwrap();
+                let color = [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+                for i in 0..7 {
+                    overrides.push((col + i, color));
+                }
+                col += 7;
+                continue;
+            }
+        }
+        col += 1;
+    }
+    overrides
+}
+
 /// Build per-cell glyphon Buffers for a terminal grid.
 ///
 /// Each visible cell gets its own single-character Buffer placed at exactly
@@ -130,6 +175,8 @@ pub fn build_span_buffers(
             continue;
         }
 
+        let hex_overrides = detect_hex_colors(row);
+
         for (col_idx, cell) in row.iter().enumerate() {
             // Skip empty cells (space / NUL) — rendered as background only.
             if cell.is_empty() {
@@ -141,7 +188,9 @@ pub fn build_span_buffers(
                 continue;
             }
 
-            let raw_fg = if cell.attrs.reverse {
+            let raw_fg = if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
+                *color
+            } else if cell.attrs.reverse {
                 resolve_color(&cell.attrs.bg, fg_color, palette)
             } else {
                 resolve_color(&cell.attrs.fg, fg_color, palette)
@@ -213,11 +262,15 @@ pub fn build_scrollback_span_buffers(
         let abs_row = scrollback_start + i;
         let row_idx = abs_row as i64 - scrollback_total_len as i64; // always <= -1
 
+        let hex_overrides = detect_hex_colors(row);
+
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() { continue; }
             if cell.ch.is_control() { continue; }
 
-            let raw_fg = if cell.attrs.reverse {
+            let raw_fg = if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
+                *color
+            } else if cell.attrs.reverse {
                 resolve_color(&cell.attrs.bg, fg_color, palette)
             } else {
                 resolve_color(&cell.attrs.fg, fg_color, palette)
