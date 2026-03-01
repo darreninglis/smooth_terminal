@@ -9,7 +9,7 @@ ICON       := macos/AppIcon.icns
 # environments that haven't sourced .zprofile (e.g. scripts, CI).
 CARGO := $(HOME)/.cargo/bin/cargo
 
-.PHONY: all bundle install icon clean run
+.PHONY: all bundle install icon clean run test
 
 # Default: build the .app bundle
 all: bundle
@@ -59,6 +59,10 @@ install: bundle
 	@echo "==> Installing to /Applications/…"
 	cp -r "$(BUNDLE)" "/Applications/$(BUNDLE)"
 	@echo "✓ Installed: /Applications/$(BUNDLE)"
+
+# ── Run tests ─────────────────────────────────────────────────────────────────
+test:
+	$(CARGO) test
 
 # ── Quick dev run (no bundle, just cargo run) ─────────────────────────────────
 run:

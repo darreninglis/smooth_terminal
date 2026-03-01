@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Determine the user's login shell.
@@ -49,7 +49,7 @@ pub struct PtyHandle {
 }
 
 impl PtyHandle {
-    pub fn spawn(cols: u16, rows: u16, cwd: Option<&PathBuf>) -> Result<Self> {
+    pub fn spawn(cols: u16, rows: u16, cwd: Option<&Path>) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,

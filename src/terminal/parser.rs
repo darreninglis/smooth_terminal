@@ -444,7 +444,7 @@ impl Perform for VtePerformer {
     }
 }
 
-fn apply_sgr(attrs: &mut CellAttributes, params: &[u16]) {
+pub(crate) fn apply_sgr(attrs: &mut CellAttributes, params: &[u16]) {
     let mut i = 0;
     if params.is_empty() {
         *attrs = CellAttributes::default();
@@ -499,5 +499,218 @@ fn apply_sgr(attrs: &mut CellAttributes, params: &[u16]) {
             _ => {}
         }
         i += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh() -> CellAttributes {
+        CellAttributes::default()
+    }
+
+    // ── SGR reset ───────────────────────────────────────────────────────
+
+    #[test]
+    fn sgr_0_resets() {
+        let mut a = fresh();
+        a.bold = true;
+        a.fg = Color::Indexed(1);
+        apply_sgr(&mut a, &[0]);
+        assert_eq!(a, fresh());
+    }
+
+    #[test]
+    fn empty_params_reset() {
+        let mut a = fresh();
+        a.bold = true;
+        apply_sgr(&mut a, &[]);
+        assert_eq!(a, fresh());
+    }
+
+    // ── SGR attributes ──────────────────────────────────────────────────
+
+    #[test]
+    fn sgr_bold() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[1]);
+        assert!(a.bold);
+    }
+
+    #[test]
+    fn sgr_italic() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[3]);
+        assert!(a.italic);
+    }
+
+    #[test]
+    fn sgr_underline() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[4]);
+        assert!(a.underline);
+    }
+
+    #[test]
+    fn sgr_reverse() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[7]);
+        assert!(a.reverse);
+    }
+
+    #[test]
+    fn sgr_strikethrough() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[9]);
+        assert!(a.strikethrough);
+    }
+
+    #[test]
+    fn sgr_dim() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[2]);
+        assert!(a.dim);
+    }
+
+    // ── SGR un-attributes ───────────────────────────────────────────────
+
+    #[test]
+    fn sgr_22_unbold_undim() {
+        let mut a = fresh();
+        a.bold = true;
+        a.dim = true;
+        apply_sgr(&mut a, &[22]);
+        assert!(!a.bold);
+        assert!(!a.dim);
+    }
+
+    #[test]
+    fn sgr_23_unitalic() {
+        let mut a = fresh();
+        a.italic = true;
+        apply_sgr(&mut a, &[23]);
+        assert!(!a.italic);
+    }
+
+    #[test]
+    fn sgr_24_ununderline() {
+        let mut a = fresh();
+        a.underline = true;
+        apply_sgr(&mut a, &[24]);
+        assert!(!a.underline);
+    }
+
+    #[test]
+    fn sgr_27_unreverse() {
+        let mut a = fresh();
+        a.reverse = true;
+        apply_sgr(&mut a, &[27]);
+        assert!(!a.reverse);
+    }
+
+    #[test]
+    fn sgr_29_unstrikethrough() {
+        let mut a = fresh();
+        a.strikethrough = true;
+        apply_sgr(&mut a, &[29]);
+        assert!(!a.strikethrough);
+    }
+
+    // ── Foreground colors ───────────────────────────────────────────────
+
+    #[test]
+    fn sgr_30_37_fg_indexed() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[31]); // red
+        assert_eq!(a.fg, Color::Indexed(1));
+        apply_sgr(&mut a, &[37]); // white
+        assert_eq!(a.fg, Color::Indexed(7));
+    }
+
+    #[test]
+    fn sgr_38_5_n_fg_256() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[38, 5, 200]);
+        assert_eq!(a.fg, Color::Indexed(200));
+    }
+
+    #[test]
+    fn sgr_38_2_rgb_fg() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[38, 2, 255, 128, 0]);
+        assert_eq!(a.fg, Color::Rgb(255, 128, 0));
+    }
+
+    #[test]
+    fn sgr_39_default_fg() {
+        let mut a = fresh();
+        a.fg = Color::Indexed(5);
+        apply_sgr(&mut a, &[39]);
+        assert_eq!(a.fg, Color::Default);
+    }
+
+    // ── Background colors ───────────────────────────────────────────────
+
+    #[test]
+    fn sgr_40_47_bg_indexed() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[41]); // red bg
+        assert_eq!(a.bg, Color::Indexed(1));
+        apply_sgr(&mut a, &[47]); // white bg
+        assert_eq!(a.bg, Color::Indexed(7));
+    }
+
+    #[test]
+    fn sgr_48_5_n_bg_256() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[48, 5, 100]);
+        assert_eq!(a.bg, Color::Indexed(100));
+    }
+
+    #[test]
+    fn sgr_48_2_rgb_bg() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[48, 2, 10, 20, 30]);
+        assert_eq!(a.bg, Color::Rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn sgr_49_default_bg() {
+        let mut a = fresh();
+        a.bg = Color::Indexed(3);
+        apply_sgr(&mut a, &[49]);
+        assert_eq!(a.bg, Color::Default);
+    }
+
+    // ── Bright colors ───────────────────────────────────────────────────
+
+    #[test]
+    fn sgr_90_97_bright_fg() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[90]); // bright black
+        assert_eq!(a.fg, Color::Indexed(8));
+        apply_sgr(&mut a, &[97]); // bright white
+        assert_eq!(a.fg, Color::Indexed(15));
+    }
+
+    #[test]
+    fn sgr_100_107_bright_bg() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[100]); // bright black bg
+        assert_eq!(a.bg, Color::Indexed(8));
+        apply_sgr(&mut a, &[107]); // bright white bg
+        assert_eq!(a.bg, Color::Indexed(15));
+    }
+
+    // ── Multiple params in one call ─────────────────────────────────────
+
+    #[test]
+    fn sgr_multiple_params() {
+        let mut a = fresh();
+        apply_sgr(&mut a, &[1, 3, 31]); // bold + italic + red fg
+        assert!(a.bold);
+        assert!(a.italic);
+        assert_eq!(a.fg, Color::Indexed(1));
     }
 }

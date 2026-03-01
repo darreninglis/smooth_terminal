@@ -90,3 +90,118 @@ impl Spring2D {
         self.x.is_settled(threshold) && self.y.is_settled(threshold)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CriticallyDampedSpring ──────────────────────────────────────────
+
+    #[test]
+    fn new_starts_at_zero() {
+        let s = CriticallyDampedSpring::new(10.0);
+        assert_eq!(s.position, 0.0);
+        assert_eq!(s.velocity, 0.0);
+        assert_eq!(s.target, 0.0);
+    }
+
+    #[test]
+    fn with_position_sets_pos_and_target() {
+        let s = CriticallyDampedSpring::with_position(10.0, 5.0);
+        assert_eq!(s.position, 5.0);
+        assert_eq!(s.target, 5.0);
+        assert_eq!(s.velocity, 0.0);
+    }
+
+    #[test]
+    fn tick_converges_toward_target() {
+        let mut s = CriticallyDampedSpring::new(10.0);
+        s.target = 100.0;
+        for _ in 0..1000 {
+            s.tick(1.0 / 60.0);
+        }
+        assert!((s.position - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tick_no_oscillation_past_target() {
+        // Critically damped should not overshoot significantly
+        let mut s = CriticallyDampedSpring::new(10.0);
+        s.target = 100.0;
+        let mut max_pos = 0.0f32;
+        for _ in 0..1000 {
+            s.tick(1.0 / 60.0);
+            max_pos = max_pos.max(s.position);
+        }
+        // Should not overshoot target by more than a tiny amount
+        assert!(max_pos < 101.0, "overshot to {}", max_pos);
+    }
+
+    #[test]
+    fn snap_to_target_zeroes_velocity() {
+        let mut s = CriticallyDampedSpring::new(10.0);
+        s.target = 50.0;
+        s.tick(1.0 / 60.0); // move a bit
+        s.snap_to_target();
+        assert_eq!(s.position, 50.0);
+        assert_eq!(s.velocity, 0.0);
+    }
+
+    #[test]
+    fn is_settled_true_at_target() {
+        let s = CriticallyDampedSpring::with_position(10.0, 5.0);
+        assert!(s.is_settled(0.01));
+    }
+
+    #[test]
+    fn is_settled_false_when_displaced() {
+        let mut s = CriticallyDampedSpring::new(10.0);
+        s.target = 100.0;
+        assert!(!s.is_settled(0.01));
+    }
+
+    #[test]
+    fn is_settled_false_with_velocity() {
+        let mut s = CriticallyDampedSpring::with_position(10.0, 100.0);
+        s.velocity = 50.0;
+        assert!(!s.is_settled(0.01));
+    }
+
+    // ── Spring2D ────────────────────────────────────────────────────────
+
+    #[test]
+    fn spring2d_tick_both_axes() {
+        let mut s = Spring2D::new(10.0);
+        s.set_target(100.0, 200.0);
+        for _ in 0..1000 {
+            s.tick(1.0 / 60.0);
+        }
+        let (px, py) = s.position();
+        assert!((px - 100.0).abs() < 0.01);
+        assert!((py - 200.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn spring2d_set_target() {
+        let mut s = Spring2D::new(10.0);
+        s.set_target(3.0, 7.0);
+        assert_eq!(s.x.target, 3.0);
+        assert_eq!(s.y.target, 7.0);
+    }
+
+    #[test]
+    fn spring2d_is_settled() {
+        let s = Spring2D::with_position(10.0, 5.0, 5.0);
+        assert!(s.is_settled(0.01));
+    }
+
+    #[test]
+    fn spring2d_snap_to_target() {
+        let mut s = Spring2D::new(10.0);
+        s.set_target(50.0, 60.0);
+        s.tick(1.0 / 60.0);
+        s.snap_to_target();
+        assert_eq!(s.position(), (50.0, 60.0));
+        assert!(s.is_settled(0.01));
+    }
+}

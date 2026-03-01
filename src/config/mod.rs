@@ -266,7 +266,7 @@ impl Config {
     }
 }
 
-fn is_dark_background(hex: &str) -> bool {
+pub(crate) fn is_dark_background(hex: &str) -> bool {
     if let Some(rgba) = parse_hex_color(hex) {
         // Luminance: 0.299*R + 0.587*G + 0.114*B
         let lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
@@ -276,7 +276,7 @@ fn is_dark_background(hex: &str) -> bool {
     }
 }
 
-fn dark_colors() -> ColorsConfig {
+pub(crate) fn dark_colors() -> ColorsConfig {
     ColorsConfig {
         background: "#000000".into(),
         foreground: "#ffffff".into(),
@@ -300,7 +300,7 @@ fn dark_colors() -> ColorsConfig {
     }
 }
 
-fn light_colors() -> ColorsConfig {
+pub(crate) fn light_colors() -> ColorsConfig {
     ColorsConfig {
         background: "#eff1f5".into(),
         foreground: "#4c4f69".into(),
@@ -339,5 +339,123 @@ pub fn parse_hex_color(hex: &str) -> Option<[f32; 4]> {
         Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0])
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_hex_color ─────────────────────────────────────────────────
+
+    #[test]
+    fn parse_hex_6_digit() {
+        let c = parse_hex_color("#ff0000").unwrap();
+        assert!((c[0] - 1.0).abs() < 0.001);
+        assert!((c[1]).abs() < 0.001);
+        assert!((c[2]).abs() < 0.001);
+        assert!((c[3] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_hex_8_digit() {
+        let c = parse_hex_color("#ff000080").unwrap();
+        assert!((c[0] - 1.0).abs() < 0.001);
+        assert!((c[3] - 128.0 / 255.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_hex_without_hash() {
+        let c = parse_hex_color("00ff00").unwrap();
+        assert!((c[1] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_hex_invalid() {
+        assert!(parse_hex_color("xyz").is_none());
+        assert!(parse_hex_color("#gg0000").is_none());
+        assert!(parse_hex_color("").is_none());
+    }
+
+    #[test]
+    fn parse_hex_wrong_length() {
+        assert!(parse_hex_color("#fff").is_none());
+        assert!(parse_hex_color("#fffffffff").is_none());
+    }
+
+    // ── is_dark_background ──────────────────────────────────────────────
+
+    #[test]
+    fn black_is_dark() {
+        assert!(is_dark_background("#000000"));
+    }
+
+    #[test]
+    fn white_is_light() {
+        assert!(!is_dark_background("#ffffff"));
+    }
+
+    #[test]
+    fn mid_gray_threshold() {
+        // Luminance of #808080: 0.299*0.502 + 0.587*0.502 + 0.114*0.502 ≈ 0.502
+        assert!(!is_dark_background("#808080"));
+        // Darker gray
+        assert!(is_dark_background("#333333"));
+    }
+
+    #[test]
+    fn invalid_hex_assumed_dark() {
+        assert!(is_dark_background("not-a-color"));
+    }
+
+    // ── ColorsConfig::ansi_palette ──────────────────────────────────────
+
+    #[test]
+    fn ansi_palette_has_16_entries() {
+        let colors = ColorsConfig::default();
+        let palette = colors.ansi_palette();
+        assert_eq!(palette.len(), 16);
+    }
+
+    #[test]
+    fn ansi_palette_index_0_is_black() {
+        let colors = ColorsConfig::default();
+        let palette = colors.ansi_palette();
+        let expected = parse_hex_color(&colors.black).unwrap();
+        assert_eq!(palette[0], expected);
+    }
+
+    #[test]
+    fn ansi_palette_index_8_is_bright_black() {
+        let colors = ColorsConfig::default();
+        let palette = colors.ansi_palette();
+        let expected = parse_hex_color(&colors.bright_black).unwrap();
+        assert_eq!(palette[8], expected);
+    }
+
+    // ── Config round-trip ───────────────────────────────────────────────
+
+    #[test]
+    fn default_config_round_trips_toml() {
+        let cfg = Config::default();
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        let cfg2: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(cfg.font.family, cfg2.font.family);
+        assert_eq!(cfg.window.width, cfg2.window.width);
+        assert_eq!(cfg.colors.background, cfg2.colors.background);
+    }
+
+    // ── dark_colors / light_colors ──────────────────────────────────────
+
+    #[test]
+    fn dark_colors_bg_is_dark() {
+        let c = dark_colors();
+        assert!(is_dark_background(&c.background));
+    }
+
+    #[test]
+    fn light_colors_bg_is_light() {
+        let c = light_colors();
+        assert!(!is_dark_background(&c.background));
     }
 }

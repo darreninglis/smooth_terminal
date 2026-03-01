@@ -188,3 +188,203 @@ impl Layout {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.001
+    }
+
+    #[test]
+    fn leaf_compute_rects_returns_input() {
+        let r = Rect::new(10.0, 20.0, 100.0, 200.0);
+        let result = Layout::Leaf(0).compute_rects(r);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 0);
+        assert_eq!(result[0].1, r);
+    }
+
+    #[test]
+    fn hsplit_divides_width() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let rects = layout.compute_rects(Rect::new(0.0, 0.0, 100.0, 50.0));
+        assert_eq!(rects.len(), 2);
+        assert!(approx_eq(rects[0].1.width, 50.0));
+        assert!(approx_eq(rects[1].1.width, 50.0));
+        assert!(approx_eq(rects[1].1.x, 50.0));
+        // Heights should be equal
+        assert!(approx_eq(rects[0].1.height, 50.0));
+        assert!(approx_eq(rects[1].1.height, 50.0));
+    }
+
+    #[test]
+    fn vsplit_divides_height() {
+        let layout = Layout::VSplit {
+            top: Box::new(Layout::Leaf(0)),
+            bottom: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let rects = layout.compute_rects(Rect::new(0.0, 0.0, 100.0, 200.0));
+        assert_eq!(rects.len(), 2);
+        assert!(approx_eq(rects[0].1.height, 100.0));
+        assert!(approx_eq(rects[1].1.height, 100.0));
+        assert!(approx_eq(rects[1].1.y, 100.0));
+    }
+
+    #[test]
+    fn nested_splits() {
+        // HSplit { VSplit(0,1), Leaf(2) }
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::VSplit {
+                top: Box::new(Layout::Leaf(0)),
+                bottom: Box::new(Layout::Leaf(1)),
+                ratio: 0.5,
+            }),
+            right: Box::new(Layout::Leaf(2)),
+            ratio: 0.5,
+        };
+        let rects = layout.compute_rects(Rect::new(0.0, 0.0, 200.0, 200.0));
+        assert_eq!(rects.len(), 3);
+        // Pane 0: top-left quadrant
+        assert!(approx_eq(rects[0].1.width, 100.0));
+        assert!(approx_eq(rects[0].1.height, 100.0));
+        // Pane 1: bottom-left quadrant
+        assert!(approx_eq(rects[1].1.y, 100.0));
+        // Pane 2: right half
+        assert!(approx_eq(rects[2].1.x, 100.0));
+        assert!(approx_eq(rects[2].1.width, 100.0));
+        assert!(approx_eq(rects[2].1.height, 200.0));
+    }
+
+    #[test]
+    fn pane_ids_collects_all() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::VSplit {
+                top: Box::new(Layout::Leaf(1)),
+                bottom: Box::new(Layout::Leaf(2)),
+                ratio: 0.5,
+            }),
+            ratio: 0.5,
+        };
+        let mut ids = layout.pane_ids();
+        ids.sort();
+        assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn split_h_creates_hsplit() {
+        let layout = Layout::Leaf(0).split_h(0, 1);
+        match &layout {
+            Layout::HSplit { left, right, ratio } => {
+                assert!(matches!(**left, Layout::Leaf(0)));
+                assert!(matches!(**right, Layout::Leaf(1)));
+                assert!(approx_eq(*ratio, 0.5));
+            }
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    #[test]
+    fn split_v_creates_vsplit() {
+        let layout = Layout::Leaf(0).split_v(0, 1);
+        match &layout {
+            Layout::VSplit { top, bottom, ratio } => {
+                assert!(matches!(**top, Layout::Leaf(0)));
+                assert!(matches!(**bottom, Layout::Leaf(1)));
+                assert!(approx_eq(*ratio, 0.5));
+            }
+            _ => panic!("expected VSplit"),
+        }
+    }
+
+    #[test]
+    fn split_non_matching_id_unchanged() {
+        let layout = Layout::Leaf(0).split_h(99, 1);
+        assert!(matches!(layout, Layout::Leaf(0)));
+    }
+
+    #[test]
+    fn contains_present_and_absent() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        assert!(layout.contains(0));
+        assert!(layout.contains(1));
+        assert!(!layout.contains(99));
+    }
+
+    #[test]
+    fn remove_leaf_collapses_parent() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let result = layout.remove(0).unwrap();
+        assert!(matches!(result, Layout::Leaf(1)));
+    }
+
+    #[test]
+    fn remove_nonexistent_returns_unchanged() {
+        let layout = Layout::Leaf(0);
+        let result = layout.remove(99);
+        assert!(matches!(result, Some(Layout::Leaf(0))));
+    }
+
+    #[test]
+    fn remove_only_leaf_returns_none() {
+        let layout = Layout::Leaf(0);
+        assert!(layout.remove(0).is_none());
+    }
+
+    #[test]
+    fn nudge_ratio_hsplit() {
+        let mut layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        layout.nudge_ratio_for(0, 0.1, 0.0);
+        match &layout {
+            Layout::HSplit { ratio, .. } => assert!(approx_eq(*ratio, 0.6)),
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    #[test]
+    fn nudge_ratio_clamps_low() {
+        let mut layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.15,
+        };
+        layout.nudge_ratio_for(0, -0.1, 0.0);
+        match &layout {
+            Layout::HSplit { ratio, .. } => assert!(approx_eq(*ratio, 0.1)),
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    #[test]
+    fn nudge_ratio_clamps_high() {
+        let mut layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.85,
+        };
+        layout.nudge_ratio_for(0, 0.1, 0.0);
+        match &layout {
+            Layout::HSplit { ratio, .. } => assert!(approx_eq(*ratio, 0.9)),
+            _ => panic!("expected HSplit"),
+        }
+    }
+}

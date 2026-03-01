@@ -2,7 +2,7 @@ pub mod layout;
 
 use anyhow::Result;
 use layout::{Layout, Rect};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub enum Direction { Left, Right, Up, Down }
 
@@ -14,7 +14,7 @@ pub struct Pane {
 }
 
 impl Pane {
-    pub fn new(id: usize, cols: usize, rows: usize, cwd: Option<&PathBuf>) -> Result<Self> {
+    pub fn new(id: usize, cols: usize, rows: usize, cwd: Option<&Path>) -> Result<Self> {
         let terminal = Terminal::new(cols, rows, cwd)?;
         Ok(Self { id, terminal })
     }
@@ -28,7 +28,7 @@ pub struct PaneTree {
 }
 
 impl PaneTree {
-    pub fn new(cols: usize, rows: usize, cwd: Option<&PathBuf>) -> Result<Self> {
+    pub fn new(cols: usize, rows: usize, cwd: Option<&Path>) -> Result<Self> {
         let pane = Pane::new(0, cols, rows, cwd)?;
         let layout = Layout::Leaf(0);
         Ok(Self {
@@ -70,7 +70,7 @@ impl PaneTree {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pane = Pane::new(new_id, cols, rows, cwd.as_ref())?;
+        let pane = Pane::new(new_id, cols, rows, cwd.as_deref())?;
         self.panes.push(pane);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));
@@ -97,7 +97,7 @@ impl PaneTree {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pane = Pane::new(new_id, cols, rows, cwd.as_ref())?;
+        let pane = Pane::new(new_id, cols, rows, cwd.as_deref())?;
         self.panes.push(pane);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));

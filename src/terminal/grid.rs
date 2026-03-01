@@ -281,3 +281,303 @@ impl TerminalGrid {
         lines.join("\n")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_dimensions_and_cursor() {
+        let g = TerminalGrid::new(80, 24);
+        assert_eq!(g.cols, 80);
+        assert_eq!(g.rows, 24);
+        assert_eq!(g.cursor_col, 0);
+        assert_eq!(g.cursor_row, 0);
+        assert_eq!(g.scroll_bottom, 23);
+        assert_eq!(g.scroll_top, 0);
+    }
+
+    #[test]
+    fn resize_preserves_content() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(0, 0, 'A');
+        g.set_cell(9, 4, 'Z');
+        g.resize(20, 10);
+        assert_eq!(g.cells[0][0].ch, 'A');
+        assert_eq!(g.cells[4][9].ch, 'Z');
+        assert_eq!(g.cols, 20);
+        assert_eq!(g.rows, 10);
+    }
+
+    #[test]
+    fn resize_clamps_cursor() {
+        let mut g = TerminalGrid::new(80, 24);
+        g.cursor_col = 79;
+        g.cursor_row = 23;
+        g.resize(40, 10);
+        assert_eq!(g.cursor_col, 39);
+        assert_eq!(g.cursor_row, 9);
+    }
+
+    #[test]
+    fn resize_resets_scroll_region() {
+        let mut g = TerminalGrid::new(80, 24);
+        g.scroll_top = 5;
+        g.scroll_bottom = 10;
+        g.resize(80, 30);
+        assert_eq!(g.scroll_top, 0);
+        assert_eq!(g.scroll_bottom, 29);
+    }
+
+    #[test]
+    fn resize_noop_when_same_size() {
+        let mut g = TerminalGrid::new(80, 24);
+        let gen_before = g.generation;
+        g.resize(80, 24);
+        assert_eq!(g.generation, gen_before);
+    }
+
+    #[test]
+    fn set_cell_writes_and_increments_gen() {
+        let mut g = TerminalGrid::new(10, 5);
+        let gen = g.generation;
+        g.set_cell(3, 2, 'X');
+        assert_eq!(g.cells[2][3].ch, 'X');
+        assert_eq!(g.generation, gen + 1);
+    }
+
+    #[test]
+    fn set_cell_oob_is_noop() {
+        let mut g = TerminalGrid::new(10, 5);
+        let gen = g.generation;
+        g.set_cell(100, 100, 'X');
+        assert_eq!(g.generation, gen);
+    }
+
+    #[test]
+    fn clear_line_empties_row() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(0, 0, 'A');
+        g.set_cell(5, 0, 'B');
+        g.clear_line(0);
+        assert_eq!(g.cells[0][0].ch, '\0');
+        assert_eq!(g.cells[0][5].ch, '\0');
+    }
+
+    #[test]
+    fn clear_line_range_partial() {
+        let mut g = TerminalGrid::new(10, 5);
+        for i in 0..10 { g.set_cell(i, 0, 'X'); }
+        g.clear_line_range(0, 3, 7);
+        assert_eq!(g.cells[0][2].ch, 'X');
+        assert_eq!(g.cells[0][3].ch, '\0');
+        assert_eq!(g.cells[0][6].ch, '\0');
+        assert_eq!(g.cells[0][7].ch, 'X');
+    }
+
+    #[test]
+    fn clear_screen_resets_cursor() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(5, 3, 'A');
+        g.cursor_col = 5;
+        g.cursor_row = 3;
+        g.pending_wrap = true;
+        g.clear_screen();
+        assert_eq!(g.cursor_col, 0);
+        assert_eq!(g.cursor_row, 0);
+        assert!(!g.pending_wrap);
+        assert_eq!(g.cells[3][5].ch, '\0');
+    }
+
+    #[test]
+    fn scroll_up_region_shifts_rows() {
+        let mut g = TerminalGrid::new(10, 5);
+        for r in 0..5 {
+            g.set_cell(0, r, char::from(b'A' + r as u8));
+        }
+        g.scroll_up_region(1);
+        assert_eq!(g.cells[0][0].ch, 'B');
+        assert_eq!(g.cells[3][0].ch, 'E');
+        assert_eq!(g.cells[4][0].ch, '\0'); // cleared
+    }
+
+    #[test]
+    fn scroll_up_region_grows_scrollback() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(0, 0, 'A');
+        g.scroll_up_region(1);
+        assert_eq!(g.scrollback.len(), 1);
+        assert_eq!(g.scrollback[0][0].ch, 'A');
+    }
+
+    #[test]
+    fn scroll_up_region_scrollback_limit() {
+        let mut g = TerminalGrid::new(10, 3);
+        g.scrollback_limit = 2;
+        for i in 0..5 {
+            g.set_cell(0, 0, char::from(b'A' + i as u8));
+            g.scroll_up_region(1);
+        }
+        assert_eq!(g.scrollback.len(), 2);
+    }
+
+    #[test]
+    fn scroll_down_region_shifts_rows_down() {
+        let mut g = TerminalGrid::new(10, 5);
+        for r in 0..5 {
+            g.set_cell(0, r, char::from(b'A' + r as u8));
+        }
+        g.scroll_down_region(1);
+        assert_eq!(g.cells[0][0].ch, '\0'); // cleared top
+        assert_eq!(g.cells[1][0].ch, 'A');
+        assert_eq!(g.cells[4][0].ch, 'D');
+    }
+
+    #[test]
+    fn newline_at_scroll_bottom_scrolls() {
+        let mut g = TerminalGrid::new(10, 3);
+        g.set_cell(0, 0, 'A');
+        g.cursor_row = 2; // scroll_bottom
+        g.newline();
+        assert_eq!(g.cursor_row, 2);
+        assert_eq!(g.scrollback.len(), 1);
+    }
+
+    #[test]
+    fn newline_not_at_bottom_increments_row() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cursor_row = 1;
+        g.newline();
+        assert_eq!(g.cursor_row, 2);
+    }
+
+    #[test]
+    fn newline_clears_pending_wrap() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.pending_wrap = true;
+        g.newline();
+        assert!(!g.pending_wrap);
+    }
+
+    #[test]
+    fn carriage_return_resets_col() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cursor_col = 5;
+        g.pending_wrap = true;
+        g.carriage_return();
+        assert_eq!(g.cursor_col, 0);
+        assert!(!g.pending_wrap);
+    }
+
+    #[test]
+    fn advance_cursor_normal() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cursor_col = 3;
+        g.advance_cursor();
+        assert_eq!(g.cursor_col, 4);
+        assert!(!g.pending_wrap);
+    }
+
+    #[test]
+    fn advance_cursor_sets_pending_wrap_at_edge() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cursor_col = 9;
+        g.advance_cursor();
+        assert!(g.pending_wrap);
+    }
+
+    #[test]
+    fn advance_cursor_by_width_2() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cursor_col = 3;
+        g.advance_cursor_by_width(2);
+        assert_eq!(g.cursor_col, 5);
+    }
+
+    #[test]
+    fn total_rows_includes_scrollback() {
+        let mut g = TerminalGrid::new(10, 5);
+        assert_eq!(g.total_rows(), 5);
+        g.set_cell(0, 0, 'A');
+        g.scroll_up_region(1);
+        assert_eq!(g.total_rows(), 6);
+    }
+
+    #[test]
+    fn detect_reverse_cursor_single_cell() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.cells[2][3].attrs.reverse = true;
+        g.detect_reverse_cursor();
+        assert_eq!(g.reverse_cursor, Some((2, 3)));
+    }
+
+    #[test]
+    fn detect_reverse_cursor_too_many_skipped() {
+        let mut g = TerminalGrid::new(10, 5);
+        // 4 reverse cells in a row — should be skipped (status bar)
+        for c in 0..4 { g.cells[2][c].attrs.reverse = true; }
+        g.detect_reverse_cursor();
+        assert_eq!(g.reverse_cursor, None);
+    }
+
+    #[test]
+    fn detect_reverse_cursor_none() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.detect_reverse_cursor();
+        assert_eq!(g.reverse_cursor, None);
+    }
+
+    #[test]
+    fn extract_selection_single_line() {
+        let mut g = TerminalGrid::new(10, 3);
+        for (i, ch) in "Hello".chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        let slen = g.scrollback.len();
+        let text = g.extract_selection((slen, 0), (slen, 4));
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn extract_selection_multi_line() {
+        let mut g = TerminalGrid::new(10, 3);
+        for (i, ch) in "AAAA".chars().enumerate() { g.set_cell(i, 0, ch); }
+        for (i, ch) in "BBBB".chars().enumerate() { g.set_cell(i, 1, ch); }
+        let slen = g.scrollback.len();
+        let text = g.extract_selection((slen, 0), (slen + 1, 3));
+        assert_eq!(text, "AAAA\nBBBB");
+    }
+
+    #[test]
+    fn extract_selection_null_to_space() {
+        let mut g = TerminalGrid::new(10, 3);
+        g.set_cell(0, 0, 'A');
+        // cells[0][1] is default '\0'
+        g.set_cell(2, 0, 'B');
+        let slen = g.scrollback.len();
+        let text = g.extract_selection((slen, 0), (slen, 2));
+        assert_eq!(text, "A B");
+    }
+
+    #[test]
+    fn extract_selection_across_scrollback() {
+        let mut g = TerminalGrid::new(10, 3);
+        for (i, ch) in "SCROLL".chars().enumerate() { g.set_cell(i, 0, ch); }
+        g.scroll_up_region(1); // row 0 → scrollback
+        for (i, ch) in "VISIBLE".chars().enumerate() { g.set_cell(i, 0, ch); }
+        // scrollback[0] = "SCROLL", visible[0] = "VISIBLE"
+        let text = g.extract_selection((0, 0), (1, 6));
+        assert_eq!(text, "SCROLL\nVISIBLE");
+    }
+
+    #[test]
+    fn extract_selection_trims_trailing_spaces() {
+        let mut g = TerminalGrid::new(10, 3);
+        g.set_cell(0, 0, 'A');
+        g.set_cell(1, 0, ' ');
+        g.set_cell(2, 0, ' ');
+        let slen = g.scrollback.len();
+        let text = g.extract_selection((slen, 0), (slen, 9));
+        assert_eq!(text, "A");
+    }
+}

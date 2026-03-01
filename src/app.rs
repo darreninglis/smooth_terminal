@@ -238,7 +238,7 @@ impl App {
     fn create_window_state(
         event_loop: &ActiveEventLoop,
         config: &Config,
-        cwd: Option<&std::path::PathBuf>,
+        cwd: Option<&std::path::Path>,
     ) -> (WindowId, WindowState) {
         let attrs = WindowAttributes::default()
             .with_title(concat!("smooth terminal v", env!("APP_VERSION")))
@@ -309,7 +309,7 @@ impl App {
     /// macOS native tab of the given "parent" window.
     fn open_new_tab(&mut self, event_loop: &ActiveEventLoop, parent_id: WindowId) {
         let cwd = self.windows.get(&parent_id).and_then(|s| s.pane_tree.focused_cwd());
-        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, cwd.as_ref());
+        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, cwd.as_deref());
 
         #[cfg(target_os = "macos")]
         {

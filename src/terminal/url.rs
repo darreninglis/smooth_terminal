@@ -105,3 +105,96 @@ fn is_url_char(ch: char) -> bool {
         | b')' | b'*' | b'+' | b',' | b';' | b'=' | b'%'
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_row(s: &str) -> Vec<Cell> {
+        s.chars().map(|ch| Cell::new(ch, Default::default())).collect()
+    }
+
+    #[test]
+    fn detect_https_url() {
+        let row = make_row("visit https://example.com/path end");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].2, "https://example.com/path");
+    }
+
+    #[test]
+    fn detect_http_url() {
+        let row = make_row("http://foo.bar/baz");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].2, "http://foo.bar/baz");
+    }
+
+    #[test]
+    fn detect_www_prefix() {
+        let row = make_row("go to www.example.com now");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].2.starts_with("https://www.example.com"));
+    }
+
+    #[test]
+    fn trailing_punctuation_stripped() {
+        let row = make_row("see https://example.com/page.");
+        let urls = detect_urls(&row);
+        assert_eq!(urls[0].2, "https://example.com/page");
+    }
+
+    #[test]
+    fn balanced_parens_kept() {
+        let row = make_row("https://en.wikipedia.org/wiki/Rust_(programming_language)");
+        let urls = detect_urls(&row);
+        assert_eq!(urls[0].2, "https://en.wikipedia.org/wiki/Rust_(programming_language)");
+    }
+
+    #[test]
+    fn unbalanced_paren_stripped() {
+        let row = make_row("(https://example.com/path)");
+        let urls = detect_urls(&row);
+        // The opening paren is not part of the URL, the closing one should be stripped
+        assert_eq!(urls[0].2, "https://example.com/path");
+    }
+
+    #[test]
+    fn prefix_only_rejected() {
+        let row = make_row("https:// nothing");
+        let urls = detect_urls(&row);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn must_have_dot_after_scheme() {
+        let row = make_row("https://localhost/path");
+        let urls = detect_urls(&row);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn empty_row_no_urls() {
+        let row = make_row("");
+        let urls = detect_urls(&row);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn multiple_urls_in_one_row() {
+        let row = make_row("https://a.com https://b.org/x");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].2, "https://a.com");
+        assert_eq!(urls[1].2, "https://b.org/x");
+    }
+
+    #[test]
+    fn column_positions_correct() {
+        let row = make_row("XX https://x.com YY");
+        let urls = detect_urls(&row);
+        assert_eq!(urls[0].0, 3);  // start col
+        assert_eq!(urls[0].1, 16); // end col (exclusive) — "https://x.com" is 13 chars
+    }
+}

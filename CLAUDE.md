@@ -29,12 +29,16 @@ make clean
 
 Note: `cargo` is not in the default PATH — always use `~/.cargo/bin/cargo` directly.
 
-**After making any code changes, build and deploy with:**
+**After making any code changes, test, build and deploy with:**
 ```bash
-~/.cargo/bin/cargo build --release && cp target/release/smooth_terminal "/Applications/Smooth Terminal.app/Contents/MacOS/smooth_terminal"
+~/.cargo/bin/cargo test && ~/.cargo/bin/cargo build --release && cp target/release/smooth_terminal "/Applications/Smooth Terminal.app/Contents/MacOS/smooth_terminal"
 ```
 
-There are no automated tests in this project.
+**Run tests before building:**
+```bash
+~/.cargo/bin/cargo test
+# or: make test
+```
 
 ## Architecture
 

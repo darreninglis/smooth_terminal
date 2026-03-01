@@ -47,3 +47,69 @@ impl ScrollSpring {
         self.spring.snap_to_target();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_by_clamps_to_zero() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 100.0;
+        s.scroll_by(-50.0);
+        assert_eq!(s.spring.target, 0.0);
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_max() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 100.0;
+        s.scroll_by(200.0);
+        assert_eq!(s.spring.target, 100.0);
+    }
+
+    #[test]
+    fn scroll_by_normal() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 100.0;
+        s.scroll_by(30.0);
+        assert_eq!(s.spring.target, 30.0);
+    }
+
+    #[test]
+    fn set_target_pixels_clamps() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 50.0;
+        s.set_target_pixels(999.0);
+        assert_eq!(s.spring.target, 50.0);
+        s.set_target_pixels(-10.0);
+        assert_eq!(s.spring.target, 0.0);
+    }
+
+    #[test]
+    fn snap_to_bottom_resets() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 100.0;
+        s.scroll_by(50.0);
+        s.tick(1.0 / 60.0);
+        s.snap_to_bottom();
+        assert_eq!(s.pixel_offset(), 0.0);
+        assert_eq!(s.spring.target, 0.0);
+    }
+
+    #[test]
+    fn tick_clamps_position() {
+        let mut s = ScrollSpring::new(15.0);
+        s.max_offset = 100.0;
+        // Force spring position negative
+        s.spring.position = -10.0;
+        s.tick(1.0 / 60.0);
+        assert!(s.pixel_offset() >= 0.0);
+    }
+
+    #[test]
+    fn is_settled_when_at_rest() {
+        let s = ScrollSpring::new(15.0);
+        assert!(s.is_settled());
+    }
+}
