@@ -12,7 +12,6 @@ pub enum InputAction {
     FocusRight,
     FocusUp,
     FocusDown,
-    Scroll(f32),
     OpenConfig,
     NewTab,
     NewWindow,
@@ -239,7 +238,7 @@ pub(crate) fn encode_named_key(key: &NamedKey, modifiers: ModifiersState) -> Vec
     }
 }
 
-pub fn handle_scroll(delta: MouseScrollDelta, scale_factor: f64) -> f32 {
+pub fn handle_scroll(delta: MouseScrollDelta, _scale_factor: f64) -> f32 {
     match delta {
         MouseScrollDelta::LineDelta(_, y) => y * 20.0,
         MouseScrollDelta::PixelDelta(p) => p.y as f32,

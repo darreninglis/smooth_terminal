@@ -14,6 +14,7 @@ impl CriticallyDampedSpring {
         Self { position: 0.0, velocity: 0.0, target: 0.0, omega }
     }
 
+    #[allow(dead_code)]
     pub fn with_position(omega: f32, position: f32) -> Self {
         Self { position, velocity: 0.0, target: position, omega }
     }
@@ -60,6 +61,7 @@ impl Spring2D {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_position(omega: f32, px: f32, py: f32) -> Self {
         Self {
             x: CriticallyDampedSpring::with_position(omega, px),
@@ -77,15 +79,18 @@ impl Spring2D {
         self.y.tick(dt);
     }
 
+    #[allow(dead_code)]
     pub fn position(&self) -> (f32, f32) {
         (self.x.position, self.y.position)
     }
 
+    #[allow(dead_code)]
     pub fn snap_to_target(&mut self) {
         self.x.snap_to_target();
         self.y.snap_to_target();
     }
 
+    #[allow(dead_code)]
     pub fn is_settled(&self, threshold: f32) -> bool {
         self.x.is_settled(threshold) && self.y.is_settled(threshold)
     }

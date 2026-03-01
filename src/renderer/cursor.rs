@@ -1,5 +1,5 @@
 use crate::animation::spring::Spring2D;
-use crate::renderer::cell_bg::{CellBgVertex, CellBgRenderer};
+use crate::renderer::cell_bg::CellBgVertex;
 
 /// Cursor animator using 4 corner springs.
 /// Each corner of the cursor block has its own spring.
@@ -159,10 +159,6 @@ impl CursorAnimator {
         }
     }
 
-    pub fn is_settled(&self) -> bool {
-        self.corners.iter().all(|c| c.is_settled(0.1))
-    }
-
     /// Build vertices for the animated cursor quad (deformed by corner springs)
     pub fn build_vertices(&self, surface_w: f32, surface_h: f32) -> [CellBgVertex; 4] {
         let to_ndc_x = |px: f32| (px / surface_w) * 2.0 - 1.0;
@@ -178,16 +174,4 @@ impl CursorAnimator {
         ]
     }
 
-    pub fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        queue: &wgpu::Queue,
-        cell_bg_renderer: &CellBgRenderer,
-        surface_w: f32,
-        surface_h: f32,
-    ) {
-        let verts = self.build_vertices(surface_w, surface_h);
-        cell_bg_renderer.render(encoder, view, queue, &verts, 1);
-    }
 }

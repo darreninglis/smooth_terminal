@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -45,7 +45,6 @@ pub struct PtyHandle {
     pub writer: Box<dyn Write + Send>,
     pub child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
     pub receiver: Receiver<Vec<u8>>,
-    sender: Sender<Vec<u8>>,
 }
 
 impl PtyHandle {
@@ -95,7 +94,6 @@ impl PtyHandle {
 
         let (sender, receiver) = bounded::<Vec<u8>>(256);
         let mut reader = master.try_clone_reader()?;
-        let sender_clone = sender.clone();
 
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -104,7 +102,7 @@ impl PtyHandle {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = buf[..n].to_vec();
-                        if sender_clone.send(data).is_err() {
+                        if sender.send(data).is_err() {
                             break;
                         }
                     }
@@ -118,7 +116,6 @@ impl PtyHandle {
             writer,
             child,
             receiver,
-            sender,
         })
     }
 

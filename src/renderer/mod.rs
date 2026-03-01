@@ -51,7 +51,6 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
-    pub surface_format: wgpu::TextureFormat,
 
     pub cell_bg_renderer: CellBgRenderer,
     /// Separate renderer for post-text overlay quads (pane borders).
@@ -182,7 +181,6 @@ impl Renderer {
             device,
             queue,
             config,
-            surface_format,
             cell_bg_renderer,
             border_renderer,
             text_renderer,
@@ -302,7 +300,7 @@ impl Renderer {
         let font_size_px = self.font_size_px;
         let font_family = self.app_config.font.family.clone();
 
-        for (pane_id, pane_rect) in &layout_rects {
+        for (pane_id, _pane_rect) in &layout_rects {
             let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
                 Some(p) => p,
                 None => continue,
@@ -713,23 +711,6 @@ impl Renderer {
         self.cursor_visible.insert(pane_id, visible);
     }
 
-    pub fn snap_cursor_for_pane(
-        &mut self,
-        pane_id: usize,
-        col: usize,
-        row: usize,
-        pane_rect: Rect,
-    ) {
-        let scroll_offset = self.scroll_springs
-            .get(&pane_id)
-            .map(|s| s.pixel_offset())
-            .unwrap_or(0.0);
-        self.ensure_pane_state(pane_id);
-        if let Some(anim) = self.cursor_animators.get_mut(&pane_id) {
-            anim.set_cell_size(self.cell_w, self.cell_h);
-            anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
-        }
-    }
 }
 
 /// Shape a single "M" character at the given physical-pixel font size and return

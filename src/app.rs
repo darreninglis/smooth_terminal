@@ -1080,7 +1080,6 @@ impl ApplicationHandler for App {
                         }
                     }
                     InputAction::None => {}
-                    InputAction::Scroll(_) => {}
                 }
             }
 

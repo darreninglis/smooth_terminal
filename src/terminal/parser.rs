@@ -13,8 +13,6 @@ pub struct VtePerformer {
     origin_mode: bool,
     /// Auto-wrap mode
     auto_wrap: bool,
-    /// Charset mapping (simplified)
-    charset: u8,
 }
 
 impl VtePerformer {
@@ -24,7 +22,6 @@ impl VtePerformer {
             saved_cursor: None,
             origin_mode: false,
             auto_wrap: true,
-            charset: 0,
         }
     }
 }
@@ -126,7 +123,7 @@ impl Perform for VtePerformer {
             return;
         }
 
-        let mut ps: Vec<u16> = params.iter().map(|s| s[0]).collect();
+        let ps: Vec<u16> = params.iter().map(|s| s[0]).collect();
 
         let mut grid = self.grid.lock();
         let rows = grid.rows;

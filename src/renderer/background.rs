@@ -11,7 +11,7 @@ struct BgUniforms {
 pub struct BackgroundRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
-    uniform_buffer: wgpu::Buffer,
+    _uniform_buffer: wgpu::Buffer,
 }
 
 impl BackgroundRenderer {
@@ -156,7 +156,7 @@ impl BackgroundRenderer {
             cache: None,
         });
 
-        Self { pipeline, bind_group, uniform_buffer }
+        Self { pipeline, bind_group, _uniform_buffer: uniform_buffer }
     }
 
     pub fn render(

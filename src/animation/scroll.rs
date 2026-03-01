@@ -30,6 +30,7 @@ impl ScrollSpring {
             .min(self.max_offset);
     }
 
+    #[allow(dead_code)]
     pub fn set_target_pixels(&mut self, offset: f32) {
         self.spring.target = offset.max(0.0).min(self.max_offset);
     }
@@ -38,6 +39,7 @@ impl ScrollSpring {
         self.spring.position
     }
 
+    #[allow(dead_code)]
     pub fn is_settled(&self) -> bool {
         self.spring.is_settled(0.5)
     }

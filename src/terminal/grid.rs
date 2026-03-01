@@ -104,6 +104,7 @@ impl TerminalGrid {
         }
     }
 
+    #[allow(dead_code)]
     pub fn clear_screen(&mut self) {
         for row in 0..self.rows {
             self.clear_line(row);
@@ -209,6 +210,7 @@ impl TerminalGrid {
         }
     }
 
+    #[allow(dead_code)]
     pub fn total_rows(&self) -> usize {
         self.scrollback.len() + self.rows
     }
