@@ -251,15 +251,6 @@ impl Config {
     }
 }
 
-/// Convert a single sRGB component (0..1) to linear light.
-pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
 pub fn parse_hex_color(hex: &str) -> Option<[f32; 4]> {
     let hex = hex.trim_start_matches('#');
     if hex.len() == 6 {

@@ -4,7 +4,7 @@ pub mod cursor;
 pub mod text_renderer;
 
 use crate::animation::scroll::ScrollSpring;
-use crate::config::{parse_hex_color, srgb_to_linear, Config};
+use crate::config::{parse_hex_color, Config};
 use crate::pane::layout::Rect;
 use crate::pane::PaneTree;
 use crate::renderer::background::BackgroundRenderer;
@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::SurfaceError;
 use winit::window::Window;
+
+const DEFAULT_CURSOR_COLOR: [f32; 4] = [0.75, 0.0, 1.0, 1.0];
 
 /// A selected region in absolute-row coordinates.
 /// abs_row = 0..scrollback_len   → scrollback row
@@ -211,7 +213,7 @@ impl Renderer {
         let cursor_freq = self.app_config.animation.cursor_spring_frequency;
         let scroll_freq = self.app_config.animation.scroll_spring_frequency;
         let cursor_color = parse_hex_color(&self.app_config.colors.cursor)
-            .unwrap_or([0.75, 0.0, 1.0, 1.0]);
+            .unwrap_or(DEFAULT_CURSOR_COLOR);
         let trail = self.app_config.animation.cursor_trail_enabled;
 
         self.cursor_animators.entry(pane_id).or_insert_with(|| {
@@ -641,7 +643,7 @@ impl Renderer {
         self.app_config = new_config;
 
         let cursor_color = parse_hex_color(&self.app_config.colors.cursor)
-            .unwrap_or([0.75, 0.0, 1.0, 1.0]);
+            .unwrap_or(DEFAULT_CURSOR_COLOR);
         for anim in self.cursor_animators.values_mut() {
             anim.color = cursor_color;
         }
