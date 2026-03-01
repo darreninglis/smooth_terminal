@@ -1,23 +1,39 @@
 use std::fs;
-use std::path::Path;
 
 fn main() {
-    let path = Path::new("build_number.txt");
+    // Rerun whenever Cargo.toml changes (covers version bumps).
+    println!("cargo:rerun-if-changed=Cargo.toml");
 
-    // Rerun whenever build_number.txt changes — which is every build, because
-    // we write to it below, guaranteeing the counter always increments.
-    println!("cargo:rerun-if-changed=build_number.txt");
+    // Read the current version from Cargo.toml so we can bake it into the binary
+    // and then bump the patch number for the *next* build.
+    let cargo_toml = fs::read_to_string("Cargo.toml").expect("could not read Cargo.toml");
 
-    // Read the current build number (seed to 1 if the file is missing).
-    let current: u32 = fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(1);
+    // Extract the current version string (e.g. "0.1.84").
+    let version_line = cargo_toml
+        .lines()
+        .find(|l| l.starts_with("version"))
+        .expect("no version in Cargo.toml");
+    let version_str = version_line
+        .split('"')
+        .nth(1)
+        .expect("malformed version line");
 
-    // Bake the number into the binary as a compile-time env var.
-    println!("cargo:rustc-env=BUILD_NUMBER={}", current);
+    // Bake the current version into the binary.
+    println!("cargo:rustc-env=APP_VERSION={}", version_str);
 
-    // Write the incremented value so the next build gets current + 1.
-    fs::write(path, format!("{}\n", current + 1))
-        .expect("could not write build_number.txt");
+    // Parse major.minor.patch and bump patch for the next build.
+    let parts: Vec<&str> = version_str.split('.').collect();
+    if parts.len() == 3 {
+        let major = parts[0];
+        let minor = parts[1];
+        let patch: u32 = parts[2].parse().unwrap_or(0);
+        let next_version = format!("{}.{}.{}", major, minor, patch + 1);
+
+        // Rewrite Cargo.toml with the incremented version.
+        let new_toml = cargo_toml.replace(
+            &format!("version = \"{}\"", version_str),
+            &format!("version = \"{}\"", next_version),
+        );
+        fs::write("Cargo.toml", new_toml).expect("could not write Cargo.toml");
+    }
 }

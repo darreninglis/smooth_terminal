@@ -37,8 +37,8 @@ pub fn setup_menubar() {
     use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
     use objc2_foundation::{MainThreadMarker, NSString};
 
-    // BUILD_NUMBER is injected at compile time by build.rs.
-    const BUILD: &str = env!("BUILD_NUMBER");
+    // APP_VERSION is injected at compile time by build.rs.
+    const VERSION: &str = env!("APP_VERSION");
 
     unsafe {
         let mtm = MainThreadMarker::new().expect("must be on main thread");
@@ -52,7 +52,7 @@ pub fn setup_menubar() {
             if main_menu.numberOfItems() > 0 {
                 if let Some(app_menu_item) = main_menu.itemAtIndex(0) {
                     let new_title =
-                        NSString::from_str(&format!("smooth terminal {}", BUILD));
+                        NSString::from_str(&format!("smooth terminal v{}", VERSION));
                     app_menu_item.setTitle(&new_title);
 
                     // Get the app submenu (winit creates it automatically).

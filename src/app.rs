@@ -206,7 +206,7 @@ impl App {
         config: &Config,
     ) -> (WindowId, WindowState) {
         let attrs = WindowAttributes::default()
-            .with_title(concat!("smooth terminal ", env!("BUILD_NUMBER")))
+            .with_title(concat!("smooth terminal v", env!("APP_VERSION")))
             .with_inner_size(winit::dpi::LogicalSize::new(
                 config.window.width,
                 config.window.height,
