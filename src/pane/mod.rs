@@ -2,6 +2,7 @@ pub mod layout;
 
 use anyhow::Result;
 use layout::{Layout, Rect};
+use std::path::PathBuf;
 
 pub enum Direction { Left, Right, Up, Down }
 
@@ -13,8 +14,8 @@ pub struct Pane {
 }
 
 impl Pane {
-    pub fn new(id: usize, cols: usize, rows: usize) -> Result<Self> {
-        let terminal = Terminal::new(cols, rows)?;
+    pub fn new(id: usize, cols: usize, rows: usize, cwd: Option<&PathBuf>) -> Result<Self> {
+        let terminal = Terminal::new(cols, rows, cwd)?;
         Ok(Self { id, terminal })
     }
 }
@@ -27,8 +28,8 @@ pub struct PaneTree {
 }
 
 impl PaneTree {
-    pub fn new(cols: usize, rows: usize) -> Result<Self> {
-        let pane = Pane::new(0, cols, rows)?;
+    pub fn new(cols: usize, rows: usize, cwd: Option<&PathBuf>) -> Result<Self> {
+        let pane = Pane::new(0, cols, rows, cwd)?;
         let layout = Layout::Leaf(0);
         Ok(Self {
             panes: vec![pane],
@@ -46,9 +47,14 @@ impl PaneTree {
         self.panes.iter_mut().find(|p| p.id == self.focused_id)
     }
 
+    pub fn focused_cwd(&self) -> Option<PathBuf> {
+        self.focused_pane().and_then(|p| p.terminal.pty.get_cwd())
+    }
+
     /// Split focused pane side by side (left | right)
     pub fn split_horizontal(&mut self, cell_w: f32, cell_h: f32, rect: Rect) -> Result<()> {
         let focused = self.focused_id;
+        let cwd = self.focused_cwd();
         let new_id = self.next_id;
         self.next_id += 1;
 
@@ -64,7 +70,7 @@ impl PaneTree {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pane = Pane::new(new_id, cols, rows)?;
+        let pane = Pane::new(new_id, cols, rows, cwd.as_ref())?;
         self.panes.push(pane);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));
@@ -76,6 +82,7 @@ impl PaneTree {
     /// Split focused pane top/bottom
     pub fn split_vertical(&mut self, cell_w: f32, cell_h: f32, rect: Rect) -> Result<()> {
         let focused = self.focused_id;
+        let cwd = self.focused_cwd();
         let new_id = self.next_id;
         self.next_id += 1;
 
@@ -90,7 +97,7 @@ impl PaneTree {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pane = Pane::new(new_id, cols, rows)?;
+        let pane = Pane::new(new_id, cols, rows, cwd.as_ref())?;
         self.panes.push(pane);
 
         let layout = std::mem::replace(&mut self.layout, Layout::Leaf(0));

@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "smooth_terminal"
-version = "0.1.104"
+version = "0.1.106"
 dependencies = [
  "anyhow",
  "block2",

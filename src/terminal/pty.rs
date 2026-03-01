@@ -2,6 +2,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Determine the user's login shell.
@@ -48,7 +49,7 @@ pub struct PtyHandle {
 }
 
 impl PtyHandle {
-    pub fn spawn(cols: u16, rows: u16) -> Result<Self> {
+    pub fn spawn(cols: u16, rows: u16, cwd: Option<&PathBuf>) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -81,6 +82,10 @@ impl PtyHandle {
         }
         // Tell the shell what it is (some prompts/tools read $SHELL directly)
         cmd.env("SHELL", &shell);
+
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
+        }
 
         let child = pair.slave.spawn_command(cmd)?;
         let child = Arc::new(Mutex::new(child));
@@ -139,5 +144,50 @@ impl PtyHandle {
             chunks.push(chunk);
         }
         chunks
+    }
+
+    /// Get the current working directory of the shell process.
+    /// Uses the macOS `proc_pidinfo` API (libproc) for reliability.
+    pub fn get_cwd(&self) -> Option<PathBuf> {
+        let pid = self.child.lock().ok()?.process_id()? as i32;
+
+        // Use libproc's proc_pidinfo with PROC_PIDVNODEPATHINFO to get cwd
+        #[repr(C)]
+        struct VnodeInfoPath {
+            _vip_vi: [u8; 152],  // struct vnode_info (padding)
+            vip_path: [u8; 1024], // MAXPATHLEN
+        }
+        #[repr(C)]
+        struct ProcVnodePathInfo {
+            pvi_cdir: VnodeInfoPath,
+            pvi_rdir: VnodeInfoPath,
+        }
+        const PROC_PIDVNODEPATHINFO: i32 = 9;
+        extern "C" {
+            fn proc_pidinfo(
+                pid: i32,
+                flavor: i32,
+                arg: u64,
+                buffer: *mut std::ffi::c_void,
+                buffersize: i32,
+            ) -> i32;
+        }
+
+        let mut info: ProcVnodePathInfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<ProcVnodePathInfo>() as i32;
+        let ret = unsafe {
+            proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &mut info as *mut _ as *mut _, size)
+        };
+        if ret <= 0 {
+            return None;
+        }
+
+        let bytes = &info.pvi_cdir.vip_path;
+        let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        let path = std::str::from_utf8(&bytes[..len]).ok()?;
+        if path.is_empty() || path == "/" {
+            return None;
+        }
+        Some(PathBuf::from(path))
     }
 }

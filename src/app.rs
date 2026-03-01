@@ -238,6 +238,7 @@ impl App {
     fn create_window_state(
         event_loop: &ActiveEventLoop,
         config: &Config,
+        cwd: Option<&std::path::PathBuf>,
     ) -> (WindowId, WindowState) {
         let attrs = WindowAttributes::default()
             .with_title(concat!("smooth terminal v", env!("APP_VERSION")))
@@ -263,7 +264,7 @@ impl App {
         let cols = cols.max(1);
         let rows = rows.max(1);
 
-        let pane_tree = PaneTree::new(cols, rows).expect("create pane tree");
+        let pane_tree = PaneTree::new(cols, rows, cwd).expect("create pane tree");
 
         // Set up config file watcher for hot-reload
         let config_path = Config::config_path();
@@ -307,7 +308,8 @@ impl App {
     /// Open a new tab by creating an in-process window and attaching it as a
     /// macOS native tab of the given "parent" window.
     fn open_new_tab(&mut self, event_loop: &ActiveEventLoop, parent_id: WindowId) {
-        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config);
+        let cwd = self.windows.get(&parent_id).and_then(|s| s.pane_tree.focused_cwd());
+        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, cwd.as_ref());
 
         #[cfg(target_os = "macos")]
         {
@@ -361,7 +363,7 @@ impl App {
 
     /// Open a new standalone window (not tabbed).
     fn open_new_window(&mut self, event_loop: &ActiveEventLoop) {
-        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config);
+        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, None);
         self.windows.insert(new_id, new_state);
     }
 
@@ -742,7 +744,7 @@ unsafe extern "C" {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (window_id, state) = Self::create_window_state(event_loop, &self.config);
+        let (window_id, state) = Self::create_window_state(event_loop, &self.config, None);
 
         #[cfg(target_os = "macos")]
         {

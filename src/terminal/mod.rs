@@ -6,6 +6,7 @@ pub mod url;
 
 use anyhow::Result;
 use parking_lot::Mutex;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use grid::TerminalGrid;
@@ -20,9 +21,9 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub fn new(cols: usize, rows: usize) -> Result<Self> {
+    pub fn new(cols: usize, rows: usize, cwd: Option<&PathBuf>) -> Result<Self> {
         let grid = Arc::new(Mutex::new(TerminalGrid::new(cols, rows)));
-        let pty = PtyHandle::spawn(cols as u16, rows as u16)?;
+        let pty = PtyHandle::spawn(cols as u16, rows as u16, cwd)?;
         let performer = VtePerformer::new(grid.clone());
         let parser = vte::Parser::new();
         Ok(Self { grid, pty, parser, performer })
