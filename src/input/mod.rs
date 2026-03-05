@@ -1,5 +1,5 @@
 use winit::event::{ElementState, KeyEvent, MouseScrollDelta};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 pub enum InputAction {
     WriteBytes(Vec<u8>),
@@ -47,6 +47,21 @@ pub fn handle_key_event(
     let shift = modifiers.shift_key();
     let ctrl = modifiers.control_key();
     let alt = modifiers.alt_key();
+
+    // Ctrl+Option+Arrow: resize focused pane
+    // Use physical_key — on macOS, Ctrl+Option+Arrow may produce a character
+    // in both logical_key and key_without_modifiers, but physical_key is always reliable.
+    if ctrl && alt && !cmd && !shift {
+        if let PhysicalKey::Code(code) = event.physical_key {
+            match code {
+                KeyCode::ArrowLeft  => return InputAction::ResizePaneLeft,
+                KeyCode::ArrowRight => return InputAction::ResizePaneRight,
+                KeyCode::ArrowUp    => return InputAction::ResizePaneUp,
+                KeyCode::ArrowDown  => return InputAction::ResizePaneDown,
+                _ => {}
+            }
+        }
+    }
 
     // Pane management shortcuts (macOS Cmd-based)
     match &event.logical_key {
@@ -132,16 +147,7 @@ pub fn handle_key_event(
                     _ => {}
                 }
             }
-            // Ctrl+Option+Arrow: resize focused pane
-            if ctrl && alt && !cmd && !shift {
-                match named {
-                    NamedKey::ArrowLeft  => return InputAction::ResizePaneLeft,
-                    NamedKey::ArrowRight => return InputAction::ResizePaneRight,
-                    NamedKey::ArrowUp    => return InputAction::ResizePaneUp,
-                    NamedKey::ArrowDown  => return InputAction::ResizePaneDown,
-                    _ => {}
-                }
-            }
+            // Ctrl+Option+Arrow resize is handled above via key_without_modifiers
             // Cmd+Up/Down: scrollback navigation
             if cmd && !shift && !ctrl {
                 match named {

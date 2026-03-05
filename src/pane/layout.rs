@@ -130,18 +130,16 @@ impl Layout {
             Layout::HSplit { left, right, ratio } => {
                 if left.contains(target_id) || right.contains(target_id) {
                     *ratio = (*ratio + h_delta).clamp(0.1, 0.9);
-                } else {
-                    left.nudge_ratio_for(target_id, h_delta, v_delta);
-                    right.nudge_ratio_for(target_id, h_delta, v_delta);
                 }
+                left.nudge_ratio_for(target_id, h_delta, v_delta);
+                right.nudge_ratio_for(target_id, h_delta, v_delta);
             }
             Layout::VSplit { top, bottom, ratio } => {
                 if top.contains(target_id) || bottom.contains(target_id) {
                     *ratio = (*ratio + v_delta).clamp(0.1, 0.9);
-                } else {
-                    top.nudge_ratio_for(target_id, h_delta, v_delta);
-                    bottom.nudge_ratio_for(target_id, h_delta, v_delta);
                 }
+                top.nudge_ratio_for(target_id, h_delta, v_delta);
+                bottom.nudge_ratio_for(target_id, h_delta, v_delta);
             }
             Layout::Leaf(_) => {}
         }
@@ -370,6 +368,33 @@ mod tests {
         layout.nudge_ratio_for(0, -0.1, 0.0);
         match &layout {
             Layout::HSplit { ratio, .. } => assert!(approx_eq(*ratio, 0.1)),
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    #[test]
+    fn nudge_ratio_nested_vsplit_inside_hsplit() {
+        // HSplit(Leaf(0), VSplit(Leaf(1), Leaf(2)))
+        let mut layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::VSplit {
+                top: Box::new(Layout::Leaf(1)),
+                bottom: Box::new(Layout::Leaf(2)),
+                ratio: 0.5,
+            }),
+            ratio: 0.5,
+        };
+        layout.nudge_ratio_for(1, 0.0, -0.1);
+        // HSplit ratio unchanged (h_delta=0)
+        match &layout {
+            Layout::HSplit { ratio, right, .. } => {
+                assert!(approx_eq(*ratio, 0.5));
+                // Inner VSplit ratio should have decreased
+                match right.as_ref() {
+                    Layout::VSplit { ratio, .. } => assert!(approx_eq(*ratio, 0.4)),
+                    _ => panic!("expected VSplit"),
+                }
+            }
             _ => panic!("expected HSplit"),
         }
     }
