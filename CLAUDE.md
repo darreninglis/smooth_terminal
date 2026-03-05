@@ -29,16 +29,11 @@ make clean
 
 Note: `cargo` is not in the default PATH — always use `~/.cargo/bin/cargo` directly.
 
-**After making any code changes, test, build and deploy with:**
+**IMPORTANT — after every prompt that changes code, you MUST run this before responding:**
 ```bash
 ~/.cargo/bin/cargo test && ~/.cargo/bin/cargo build --release && cp target/release/smooth_terminal "/Applications/Smooth Terminal.app/Contents/MacOS/smooth_terminal"
 ```
-
-**Run tests before building:**
-```bash
-~/.cargo/bin/cargo test
-# or: make test
-```
+This runs tests, builds the release binary, and deploys it to `/Applications`. Do this even if the user doesn't ask — it is always required after code changes.
 
 ## Architecture
 

@@ -14,6 +14,7 @@ line_height = 1.2
 background = "#000000"
 foreground = "#ffffff"
 cursor = "#bf00ff"
+cursor_text = "#000000"
 # ANSI palette (optional overrides)
 black   = "#45475a"
 red     = "#f38ba8"

@@ -66,7 +66,7 @@ pub struct Renderer {
     pub cursor_visible: HashMap<usize, bool>,
     pub scroll_springs: HashMap<usize, ScrollSpring>,
     /// Per-pane visible span-buffer cache. Key = pane_id, Value = (grid generation, buffers).
-    text_cache: HashMap<usize, (u64, Vec<SpanBuffer>)>,
+    text_cache: HashMap<usize, (u64, Option<(usize, usize)>, Vec<SpanBuffer>)>,
     /// Per-pane scrollback span-buffer cache. Key = pane_id,
     /// Value = ((scrollback_len, first_abs_row), buffers).
     scrollback_text_cache: HashMap<usize, ((usize, usize), Vec<SpanBuffer>)>,
@@ -321,7 +321,14 @@ impl Renderer {
                 .unwrap_or(0.0);
 
             // Rebuild visible span buffer cache if grid changed
-            if !self.text_cache.get(pane_id).map_or(false, |(g, _)| *g == current_gen) {
+            let cursor_pos = if *pane_id == pane_tree.focused_id {
+                Some((grid.cursor_row, grid.cursor_col))
+            } else {
+                None
+            };
+            if !self.text_cache.get(pane_id).map_or(false, |(g, cp, _)| *g == current_gen && *cp == cursor_pos) {
+                let cursor_text_color = parse_hex_color(&self.app_config.colors.cursor_text)
+                    .unwrap_or(bg_color);
                 let span_buffers = build_span_buffers(
                     &mut self.text_renderer.font_system,
                     &grid,
@@ -331,8 +338,10 @@ impl Renderer {
                     cell_w,
                     fg_color,
                     &palette,
+                    cursor_pos,
+                    cursor_text_color,
                 );
-                self.text_cache.insert(*pane_id, (current_gen, span_buffers));
+                self.text_cache.insert(*pane_id, (current_gen, cursor_pos, span_buffers));
             }
 
             // Rebuild scrollback span buffer cache if scrolled and cache is stale
@@ -518,7 +527,7 @@ impl Renderer {
             };
 
             // Visible rows
-            if let Some((_, span_buffers)) = self.text_cache.get(pane_id) {
+            if let Some((_, _, span_buffers)) = self.text_cache.get(pane_id) {
                 for sb in span_buffers {
                     let y = cy + sb.row_idx as f32 * cell_h + scroll_offset;
                     if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {

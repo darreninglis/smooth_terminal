@@ -157,6 +157,8 @@ pub fn build_span_buffers(
     cell_w: f32,
     fg_color: [f32; 4],
     palette: &[[f32; 4]; 16],
+    cursor_pos: Option<(usize, usize)>,
+    cursor_text_color: [f32; 4],
 ) -> Vec<SpanBuffer> {
     let metrics = Metrics::new(font_size, cell_h);
     // Shaping::Advanced enables proper multi-font fallback so that any
@@ -188,7 +190,10 @@ pub fn build_span_buffers(
                 continue;
             }
 
-            let raw_fg = if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
+            let is_cursor = cursor_pos.map_or(false, |(r, c)| r == row_idx && c == col_idx);
+            let raw_fg = if is_cursor {
+                cursor_text_color
+            } else if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
                 *color
             } else if cell.attrs.reverse {
                 resolve_color(&cell.attrs.bg, fg_color, palette)

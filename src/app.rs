@@ -991,6 +991,24 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
+                    InputAction::SelectAll => {
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            let focused_id = state.pane_tree.focused_id;
+                            if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == focused_id) {
+                                let grid = pane.terminal.grid.lock();
+                                let range = grid.cursor_line_input_range()
+                                    .or_else(|| grid.full_content_range());
+                                drop(grid);
+                                if let Some((start_row, start_col, end_row, end_col)) = range {
+                                    state.selection = Some(Selection {
+                                        anchor: (start_row, start_col),
+                                        head: (end_row, end_col),
+                                    });
+                                    state.selection_pane = focused_id;
+                                }
+                            }
+                        }
+                    }
                     InputAction::CopySelection => {
                         #[cfg(target_os = "macos")]
                         if let Some(state) = self.windows.get(&window_id) {
@@ -1006,6 +1024,26 @@ impl ApplicationHandler for App {
                                             Self::macos_copy_to_clipboard(&text);
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+                    InputAction::CutSelection => {
+                        #[cfg(target_os = "macos")]
+                        if let Some(state) = self.windows.get_mut(&window_id) {
+                            if let Some(sel) = &state.selection {
+                                if !sel.is_empty() {
+                                    let pane_id = state.selection_pane;
+                                    if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == pane_id) {
+                                        let grid = pane.terminal.grid.lock();
+                                        let (start, end) = sel.normalized();
+                                        let text = grid.extract_selection(start, end);
+                                        drop(grid);
+                                        if !text.is_empty() {
+                                            Self::macos_copy_to_clipboard(&text);
+                                        }
+                                    }
+                                    state.selection = None;
                                 }
                             }
                         }

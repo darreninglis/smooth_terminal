@@ -24,7 +24,9 @@ pub enum InputAction {
     ScrollViewUp,
     ScrollViewDown,
     // Clipboard
+    SelectAll,
     CopySelection,
+    CutSelection,
     Paste,
     // Pane resize (Ctrl+Option+Arrow)
     ResizePaneLeft,
@@ -100,9 +102,17 @@ pub fn handle_key_event(
             if cmd && shift && !ctrl && lc == "l" {
                 return InputAction::ToggleTheme;
             }
+            // Cmd+A: select all
+            if cmd && !shift && !ctrl && lc == "a" {
+                return InputAction::SelectAll;
+            }
             // Cmd+C: copy selection
             if cmd && !shift && !ctrl && lc == "c" {
                 return InputAction::CopySelection;
+            }
+            // Cmd+X: cut selection (copy + clear)
+            if cmd && !shift && !ctrl && lc == "x" {
+                return InputAction::CutSelection;
             }
             // Cmd+V: paste
             if cmd && !shift && !ctrl && lc == "v" {

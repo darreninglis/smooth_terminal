@@ -215,6 +215,35 @@ impl TerminalGrid {
         self.scrollback.len() + self.rows
     }
 
+    /// Return the index (in absolute row space) of the last row that contains
+    /// any non-default content, plus the last non-empty column on that row.
+    /// Returns `None` if the entire grid (including scrollback) is empty.
+    pub fn last_content_position(&self) -> Option<(usize, usize)> {
+        let sb_len = self.scrollback.len();
+        // Search visible rows bottom-up
+        for r in (0..self.rows).rev() {
+            if let Some(col) = self.last_nonempty_col(&self.cells[r]) {
+                return Some((sb_len + r, col));
+            }
+        }
+        // Search scrollback bottom-up
+        for r in (0..sb_len).rev() {
+            if let Some(col) = self.last_nonempty_col(&self.scrollback[r]) {
+                return Some((r, col));
+            }
+        }
+        None
+    }
+
+    fn last_nonempty_col(&self, row: &[Cell]) -> Option<usize> {
+        for c in (0..row.len()).rev() {
+            if row[c].ch != '\0' && row[c].ch != ' ' {
+                return Some(c);
+            }
+        }
+        None
+    }
+
     /// Scan visible cells for a TUI-drawn cursor (single reverse-video cell).
     /// Claude Code / Ink draws its cursor as one character with `ESC[7m`
     /// (reverse attribute).  We look for the *last* row that contains exactly
@@ -244,6 +273,91 @@ impl TerminalGrid {
             }
         }
         self.reverse_cursor = None;
+    }
+
+    /// Return the start column of user input on the cursor row by detecting
+    /// common shell prompt endings (`% `, `$ `, `> `, `# `).
+    /// Returns `None` if no prompt pattern is found (falls back to col 0).
+    pub fn prompt_end_col(&self) -> Option<usize> {
+        self.prompt_end_col_for_row(self.cursor_row)
+    }
+
+    /// Return the range of user input around the cursor, spanning multiple lines
+    /// if needed. Scans upward from the cursor row to find the prompt marker,
+    /// then selects from prompt end to the last non-empty column on the cursor row.
+    pub fn cursor_line_input_range(&self) -> Option<(usize, usize, usize, usize)> {
+        let slen = self.scrollback.len();
+        // Find the prompt row by scanning upward from cursor_row
+        let mut prompt_row = self.cursor_row;
+        let mut prompt_col = 0usize;
+        for r in (0..=self.cursor_row).rev() {
+            if let Some(col) = self.prompt_end_col_for_row(r) {
+                prompt_row = r;
+                prompt_col = col;
+                break;
+            }
+            // If we hit an empty row, stop scanning — input doesn't span past gaps
+            if self.last_nonempty_col(&self.cells[r]).is_none() && r < self.cursor_row {
+                break;
+            }
+        }
+        let end_col = self.last_nonempty_col(&self.cells[self.cursor_row])?;
+        if prompt_row == self.cursor_row && prompt_col > end_col {
+            return None;
+        }
+        Some((slen + prompt_row, prompt_col, slen + self.cursor_row, end_col))
+    }
+
+    /// Detect prompt end column on a specific visible row.
+    fn prompt_end_col_for_row(&self, row_idx: usize) -> Option<usize> {
+        let row = &self.cells[row_idx];
+        let limit = if row_idx == self.cursor_row {
+            self.cursor_col.min(row.len())
+        } else {
+            row.len().saturating_sub(1)
+        };
+        for c in (1..=limit).rev() {
+            let prev_ch = row[c - 1].ch;
+            let cur_ch = row[c].ch;
+            if (prev_ch == '%' || prev_ch == '$' || prev_ch == '>' || prev_ch == '#')
+                && cur_ch == ' '
+            {
+                let start = c + 1;
+                return if start <= limit { Some(start) } else { None };
+            }
+        }
+        None
+    }
+
+    /// Return the range spanning all non-empty content (scrollback + visible).
+    /// Used as a fallback for SelectAll in TUI apps where prompt detection fails.
+    pub fn full_content_range(&self) -> Option<(usize, usize, usize, usize)> {
+        let slen = self.scrollback.len();
+        // Find first non-empty row
+        let mut first_row: Option<usize> = None;
+        let mut last_row: Option<usize> = None;
+        for abs_row in 0..(slen + self.rows) {
+            let row: &[Cell] = if abs_row < slen {
+                &self.scrollback[abs_row]
+            } else {
+                &self.cells[abs_row - slen]
+            };
+            if self.last_nonempty_col(row).is_some() {
+                if first_row.is_none() {
+                    first_row = Some(abs_row);
+                }
+                last_row = Some(abs_row);
+            }
+        }
+        let first = first_row?;
+        let last = last_row?;
+        let last_cells: &[Cell] = if last < slen {
+            &self.scrollback[last]
+        } else {
+            &self.cells[last - slen]
+        };
+        let end_col = self.last_nonempty_col(last_cells)?;
+        Some((first, 0, last, end_col))
     }
 
     /// Extract text for a selection range.
@@ -581,5 +695,125 @@ mod tests {
         let slen = g.scrollback.len();
         let text = g.extract_selection((slen, 0), (slen, 9));
         assert_eq!(text, "A");
+    }
+
+    #[test]
+    fn last_content_position_empty_grid() {
+        let g = TerminalGrid::new(10, 5);
+        assert_eq!(g.last_content_position(), None);
+    }
+
+    #[test]
+    fn last_content_position_visible_only() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(0, 0, 'A');
+        g.set_cell(3, 2, 'Z');
+        // Last content is row 2, col 3
+        assert_eq!(g.last_content_position(), Some((2, 3)));
+    }
+
+    #[test]
+    fn last_content_position_with_scrollback() {
+        let mut g = TerminalGrid::new(10, 3);
+        for (i, ch) in "Hello".chars().enumerate() { g.set_cell(i, 0, ch); }
+        g.scroll_up_region(1); // row 0 → scrollback
+        // visible rows are now empty, scrollback has "Hello"
+        assert_eq!(g.last_content_position(), Some((0, 4)));
+    }
+
+    #[test]
+    fn last_content_position_ignores_spaces() {
+        let mut g = TerminalGrid::new(10, 5);
+        g.set_cell(0, 0, 'A');
+        g.cells[0][1].ch = ' ';
+        // Only 'A' at col 0 counts
+        assert_eq!(g.last_content_position(), Some((0, 0)));
+    }
+
+    #[test]
+    fn prompt_end_col_zsh_percent() {
+        // Simulate "user@host ~ % ls -la"
+        let mut g = TerminalGrid::new(30, 5);
+        let prompt = "user@host ~ % ls -la";
+        for (i, ch) in prompt.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        g.cursor_row = 0;
+        g.cursor_col = prompt.len() - 1;
+        // "% " at cols 12-13, so input starts at col 14
+        assert_eq!(g.prompt_end_col(), Some(14));
+    }
+
+    #[test]
+    fn prompt_end_col_bash_dollar() {
+        let mut g = TerminalGrid::new(30, 5);
+        let prompt = "user$ echo hi";
+        for (i, ch) in prompt.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        g.cursor_row = 0;
+        g.cursor_col = prompt.len() - 1;
+        assert_eq!(g.prompt_end_col(), Some(6));
+    }
+
+    #[test]
+    fn prompt_end_col_none_when_no_prompt() {
+        let mut g = TerminalGrid::new(30, 5);
+        let text = "hello world";
+        for (i, ch) in text.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        g.cursor_row = 0;
+        g.cursor_col = text.len() - 1;
+        assert_eq!(g.prompt_end_col(), None);
+    }
+
+    #[test]
+    fn cursor_line_input_range_selects_user_input() {
+        let mut g = TerminalGrid::new(30, 5);
+        let prompt = "~ % ls -la";
+        for (i, ch) in prompt.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        g.cursor_row = 0;
+        g.cursor_col = prompt.len() - 1;
+        let range = g.cursor_line_input_range();
+        // "% " at cols 2-3, input starts col 4, last content col 9
+        assert_eq!(range, Some((0, 4, 0, 9)));
+    }
+
+    #[test]
+    fn cursor_line_input_range_empty_input() {
+        let mut g = TerminalGrid::new(30, 5);
+        // Just the prompt, no user input: "~ % "
+        let prompt = "~ % ";
+        for (i, ch) in prompt.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        g.cursor_row = 0;
+        g.cursor_col = 4; // cursor right after prompt
+        // start_col=4 but last_nonempty is col 1 (%)... actually spaces don't count
+        // last_nonempty_col would be col 1 (%), start_col=4 > 1, so None
+        assert_eq!(g.cursor_line_input_range(), None);
+    }
+
+    #[test]
+    fn cursor_line_input_range_multiline() {
+        // Simulate: "~ % echo hello \\\n  world"
+        // Row 0: prompt + first line, Row 1: continuation
+        let mut g = TerminalGrid::new(30, 5);
+        let line0 = "~ % echo hello \\";
+        for (i, ch) in line0.chars().enumerate() {
+            g.set_cell(i, 0, ch);
+        }
+        let line1 = "  world";
+        for (i, ch) in line1.chars().enumerate() {
+            g.set_cell(i, 1, ch);
+        }
+        g.cursor_row = 1;
+        g.cursor_col = line1.len() - 1;
+        let range = g.cursor_line_input_range();
+        // Should start at row 0 col 4 (after "% "), end at row 1 col 6 ("world" ends at 6)
+        assert_eq!(range, Some((0, 4, 1, 6)));
     }
 }

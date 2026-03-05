@@ -50,6 +50,8 @@ pub struct ColorsConfig {
     pub background: String,
     pub foreground: String,
     pub cursor: String,
+    #[serde(default)]
+    pub cursor_text: String,
     #[serde(default = "default_black")]
     pub black: String,
     #[serde(default = "default_red")]
@@ -107,6 +109,7 @@ impl Default for ColorsConfig {
             background: "#000000".to_string(),
             foreground: "#ffffff".to_string(),
             cursor: "#bf00ff".to_string(),
+            cursor_text: "#000000".to_string(),
             black: default_black(),
             red: default_red(),
             green: default_green(),
@@ -281,6 +284,7 @@ pub(crate) fn dark_colors() -> ColorsConfig {
         background: "#000000".into(),
         foreground: "#ffffff".into(),
         cursor: "#bf00ff".into(),
+        cursor_text: "#000000".into(),
         black: "#45475a".into(),
         red: "#f38ba8".into(),
         green: "#a6e3a1".into(),
@@ -305,6 +309,7 @@ pub(crate) fn light_colors() -> ColorsConfig {
         background: "#eff1f5".into(),
         foreground: "#4c4f69".into(),
         cursor: "#7c3aed".into(),
+        cursor_text: "#eff1f5".into(),
         black: "#5c5f77".into(),
         red: "#d20f39".into(),
         green: "#40a02b".into(),
