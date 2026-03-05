@@ -148,6 +148,22 @@ fn detect_hex_colors(row: &[crate::terminal::cell::Cell]) -> Vec<(usize, [f32; 4
 /// within a long span caused the cursor to drift by an amount proportional to
 /// the span's length (visible as the cursor being offset by the directory-name
 /// portion of the shell prompt).
+/// Selection range: ((start_row, start_col), (end_row, end_col)) in abs_row coords.
+pub type SelectionRange = ((usize, usize), (usize, usize));
+
+/// Light gray color used for text inside a selection highlight.
+const SELECTION_TEXT_COLOR: [f32; 4] = [0.9, 0.9, 0.9, 1.0];
+
+fn is_cell_selected(sel: &SelectionRange, abs_row: usize, col: usize, cols: usize) -> bool {
+    let (start, end) = sel;
+    if abs_row < start.0 || abs_row > end.0 {
+        return false;
+    }
+    let col_start = if abs_row == start.0 { start.1 } else { 0 };
+    let col_end = if abs_row == end.0 { end.1 } else { cols.saturating_sub(1) };
+    col >= col_start && col <= col_end
+}
+
 pub fn build_span_buffers(
     font_system: &mut FontSystem,
     grid: &crate::terminal::grid::TerminalGrid,
@@ -159,6 +175,7 @@ pub fn build_span_buffers(
     palette: &[[f32; 4]; 16],
     cursor_pos: Option<(usize, usize)>,
     cursor_text_color: [f32; 4],
+    selection: Option<SelectionRange>,
 ) -> Vec<SpanBuffer> {
     let metrics = Metrics::new(font_size, cell_h);
     // Shaping::Advanced enables proper multi-font fallback so that any
@@ -190,8 +207,13 @@ pub fn build_span_buffers(
                 continue;
             }
 
+            let scrollback_len = grid.scrollback.len();
+            let abs_row = scrollback_len + row_idx;
             let is_cursor = cursor_pos.map_or(false, |(r, c)| r == row_idx && c == col_idx);
-            let raw_fg = if is_cursor {
+            let in_sel = selection.as_ref().map_or(false, |s| is_cell_selected(s, abs_row, col_idx, grid.cols));
+            let raw_fg = if in_sel {
+                SELECTION_TEXT_COLOR
+            } else if is_cursor {
                 cursor_text_color
             } else if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
                 *color
@@ -251,6 +273,7 @@ pub fn build_scrollback_span_buffers(
     cell_w: f32,
     fg_color: [f32; 4],
     palette: &[[f32; 4]; 16],
+    selection: Option<SelectionRange>,
 ) -> Vec<SpanBuffer> {
     let metrics = Metrics::new(font_size, cell_h);
     let family = if font_family.is_empty() {
@@ -273,7 +296,11 @@ pub fn build_scrollback_span_buffers(
             if cell.is_empty() { continue; }
             if cell.ch.is_control() { continue; }
 
-            let raw_fg = if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
+            let cols = row.len();
+            let in_sel = selection.as_ref().map_or(false, |s| is_cell_selected(s, abs_row, col_idx, cols));
+            let raw_fg = if in_sel {
+                SELECTION_TEXT_COLOR
+            } else if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
                 *color
             } else if cell.attrs.reverse {
                 resolve_color(&cell.attrs.bg, fg_color, palette)
