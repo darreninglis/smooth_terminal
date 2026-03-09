@@ -4,6 +4,7 @@ use anyhow::Result;
 use layout::{Layout, Rect};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction { Left, Right, Up, Down }
 
 use crate::terminal::Terminal;
@@ -219,5 +220,271 @@ impl PaneTree {
                 let _ = pane.terminal.resize(cols, rows);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a PaneTree with real PTYs for testing. Panes spawn /usr/bin/true
+    /// which exits immediately, so they're lightweight.
+    fn test_tree(ids: &[usize], layout: Layout, focused: usize) -> PaneTree {
+        let panes: Vec<Pane> = ids.iter().map(|&id| {
+            Pane::new(id, 80, 24, None).expect("spawn pane for test")
+        }).collect();
+        let next_id = ids.iter().max().unwrap_or(&0) + 1;
+        PaneTree { panes, layout, focused_id: focused, next_id }
+    }
+
+    // ── focus_next / focus_prev ──
+
+    #[test]
+    fn focus_next_cycles_forward() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.focus_next();
+        assert_eq!(tree.focused_id, 1);
+        tree.focus_next();
+        assert_eq!(tree.focused_id, 0); // wraps
+    }
+
+    #[test]
+    fn focus_prev_cycles_backward() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.focus_prev();
+        assert_eq!(tree.focused_id, 1); // wraps backward
+        tree.focus_prev();
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    #[test]
+    fn focus_next_three_panes() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::HSplit {
+                left: Box::new(Layout::Leaf(1)),
+                right: Box::new(Layout::Leaf(2)),
+                ratio: 0.5,
+            }),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1, 2], layout, 0);
+        tree.focus_next();
+        assert_eq!(tree.focused_id, 1);
+        tree.focus_next();
+        assert_eq!(tree.focused_id, 2);
+        tree.focus_next();
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    // ── focus_direction ──
+
+    fn two_h_rects() -> Vec<(usize, Rect)> {
+        vec![
+            (0, Rect::new(0.0, 0.0, 400.0, 600.0)),
+            (1, Rect::new(400.0, 0.0, 400.0, 600.0)),
+        ]
+    }
+
+    #[test]
+    fn focus_direction_right() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.focus_direction(&two_h_rects(), Direction::Right);
+        assert_eq!(tree.focused_id, 1);
+    }
+
+    #[test]
+    fn focus_direction_left() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 1);
+        tree.focus_direction(&two_h_rects(), Direction::Left);
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    #[test]
+    fn focus_direction_no_candidate_stays() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.focus_direction(&two_h_rects(), Direction::Left);
+        assert_eq!(tree.focused_id, 0); // no pane to the left
+    }
+
+    #[test]
+    fn focus_direction_up_down() {
+        let rects = vec![
+            (0, Rect::new(0.0, 0.0, 800.0, 300.0)),
+            (1, Rect::new(0.0, 300.0, 800.0, 300.0)),
+        ];
+        let layout = Layout::VSplit {
+            top: Box::new(Layout::Leaf(0)),
+            bottom: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.focus_direction(&rects, Direction::Down);
+        assert_eq!(tree.focused_id, 1);
+        tree.focus_direction(&rects, Direction::Up);
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    #[test]
+    fn focus_direction_picks_nearest() {
+        // Three panes in a row: [0][1][2], focused on 0, Right should pick 1 (nearest)
+        let rects = vec![
+            (0, Rect::new(0.0, 0.0, 200.0, 600.0)),
+            (1, Rect::new(200.0, 0.0, 200.0, 600.0)),
+            (2, Rect::new(400.0, 0.0, 200.0, 600.0)),
+        ];
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::HSplit {
+                left: Box::new(Layout::Leaf(1)),
+                right: Box::new(Layout::Leaf(2)),
+                ratio: 0.5,
+            }),
+            ratio: 0.33,
+        };
+        let mut tree = test_tree(&[0, 1, 2], layout, 0);
+        tree.focus_direction(&rects, Direction::Right);
+        assert_eq!(tree.focused_id, 1);
+    }
+
+    // ── close_pane ──
+
+    #[test]
+    fn close_focused_moves_focus_to_first() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 1);
+        tree.close_focused();
+        assert_eq!(tree.panes.len(), 1);
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    #[test]
+    fn close_non_focused_keeps_focus() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.close_pane(1);
+        assert_eq!(tree.panes.len(), 1);
+        assert_eq!(tree.focused_id, 0);
+    }
+
+    #[test]
+    fn close_pane_updates_layout() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.close_pane(1);
+        assert_eq!(tree.layout.pane_ids(), vec![0]);
+    }
+
+    // ── resize_focused ──
+
+    #[test]
+    fn resize_focused_adjusts_ratio() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.resize_focused(Direction::Right);
+        match &tree.layout {
+            Layout::HSplit { ratio, .. } => assert!((*ratio - 0.55).abs() < 0.001),
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    #[test]
+    fn resize_focused_left_decreases_ratio() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        tree.resize_focused(Direction::Left);
+        match &tree.layout {
+            Layout::HSplit { ratio, .. } => assert!((*ratio - 0.45).abs() < 0.001),
+            _ => panic!("expected HSplit"),
+        }
+    }
+
+    // ── split ──
+
+    #[test]
+    fn split_horizontal_adds_pane_and_focuses_new() {
+        let mut tree = PaneTree::new(80, 24, None).unwrap();
+        let rect = Rect::new(0.0, 0.0, 800.0, 600.0);
+        tree.split_horizontal(10.0, 20.0, rect).unwrap();
+        assert_eq!(tree.panes.len(), 2);
+        assert_eq!(tree.focused_id, 1);
+        assert_eq!(tree.layout.pane_ids().len(), 2);
+    }
+
+    #[test]
+    fn split_vertical_adds_pane_and_focuses_new() {
+        let mut tree = PaneTree::new(80, 24, None).unwrap();
+        let rect = Rect::new(0.0, 0.0, 800.0, 600.0);
+        tree.split_vertical(10.0, 20.0, rect).unwrap();
+        assert_eq!(tree.panes.len(), 2);
+        assert_eq!(tree.focused_id, 1);
+        assert_eq!(tree.layout.pane_ids().len(), 2);
+    }
+
+    #[test]
+    fn focused_pane_returns_correct_pane() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let tree = test_tree(&[0, 1], layout, 1);
+        assert_eq!(tree.focused_pane().unwrap().id, 1);
+    }
+
+    #[test]
+    fn focused_pane_mut_returns_correct_pane() {
+        let layout = Layout::HSplit {
+            left: Box::new(Layout::Leaf(0)),
+            right: Box::new(Layout::Leaf(1)),
+            ratio: 0.5,
+        };
+        let mut tree = test_tree(&[0, 1], layout, 0);
+        assert_eq!(tree.focused_pane_mut().unwrap().id, 0);
     }
 }
