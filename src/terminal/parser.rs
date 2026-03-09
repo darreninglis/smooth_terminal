@@ -123,7 +123,15 @@ impl Perform for VtePerformer {
             return;
         }
 
-        let ps: Vec<u16> = params.iter().map(|s| s[0]).collect();
+        let mut ps_buf = [0u16; 16];
+        let mut ps_len = 0;
+        for s in params.iter() {
+            if ps_len < 16 {
+                ps_buf[ps_len] = s[0];
+                ps_len += 1;
+            }
+        }
+        let ps = &ps_buf[..ps_len];
 
         let mut grid = self.grid.lock();
         let rows = grid.rows;
@@ -239,10 +247,10 @@ impl Perform for VtePerformer {
                 let row = &mut grid.cells[cr];
                 let shift = n.min(end - cc);
                 for i in cc..(end - shift) {
-                    row[i] = row[i + shift].clone();
+                    row[i] = row[i + shift];
                 }
                 for i in (end - shift)..end {
-                    row[i] = Default::default();
+                    row[i] = Cell::default();
                 }
             }
             // Erase Characters
@@ -262,7 +270,7 @@ impl Perform for VtePerformer {
                 let row = &mut grid.cells[cr];
                 // Shift existing characters right to make room
                 for i in (cc + shift..cols).rev() {
-                    row[i] = row[i - shift].clone();
+                    row[i] = row[i - shift];
                 }
                 // Clear the inserted positions
                 for i in cc..(cc + shift).min(cols) {
@@ -349,7 +357,7 @@ impl Perform for VtePerformer {
             }
             // DEC private modes
             (Some(b'?'), 'h') => {
-                for p in &ps {
+                for p in ps {
                     match p {
                         1 => {} // DECCKM — application cursor keys (ignore for now)
                         7 => { self.auto_wrap = true; }
@@ -370,7 +378,7 @@ impl Perform for VtePerformer {
                 }
             }
             (Some(b'?'), 'l') => {
-                for p in &ps {
+                for p in ps {
                     match p {
                         7 => { self.auto_wrap = false; }
                         25 => { grid.cursor_visible = false; }

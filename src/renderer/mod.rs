@@ -12,7 +12,7 @@ use crate::renderer::cell_bg::{cell_quad_vertices, CellBgRenderer, CellBgVertex}
 use crate::renderer::cursor::CursorAnimator;
 use crate::renderer::text_renderer::{
     build_scrollback_span_buffers, build_span_buffers, to_glyphon_color, PaneTextRenderer,
-    SelectionRange, SpanBuffer,
+    SelectionRange, SpanBuildParams, SpanBuffer,
 };
 use glyphon::{TextArea, TextBounds};
 use std::collections::HashMap;
@@ -46,6 +46,21 @@ impl Selection {
     }
 }
 
+/// Cached visible-row span buffers for a pane.
+struct TextCache {
+    generation: u64,
+    cursor_pos: Option<(usize, usize)>,
+    selection: Option<SelectionRange>,
+    buffers: Vec<SpanBuffer>,
+}
+
+/// Cached scrollback span buffers for a pane.
+struct ScrollbackCache {
+    key: (usize, usize), // (scrollback_len, first_abs_row)
+    selection: Option<SelectionRange>,
+    buffers: Vec<SpanBuffer>,
+}
+
 pub struct Renderer {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
@@ -65,11 +80,8 @@ pub struct Renderer {
     /// Per-pane cursor visibility (DECTCEM). TUI apps hide the terminal cursor.
     pub cursor_visible: HashMap<usize, bool>,
     pub scroll_springs: HashMap<usize, ScrollSpring>,
-    /// Per-pane visible span-buffer cache. Key = pane_id, Value = (grid generation, cursor_pos, selection, buffers).
-    text_cache: HashMap<usize, (u64, Option<(usize, usize)>, Option<SelectionRange>, Vec<SpanBuffer>)>,
-    /// Per-pane scrollback span-buffer cache. Key = pane_id,
-    /// Value = ((scrollback_len, first_abs_row), selection, buffers).
-    scrollback_text_cache: HashMap<usize, ((usize, usize), Option<SelectionRange>, Vec<SpanBuffer>)>,
+    text_cache: HashMap<usize, TextCache>,
+    scrollback_text_cache: HashMap<usize, ScrollbackCache>,
 
     pub cell_w: f32,
     pub cell_h: f32,
@@ -299,13 +311,22 @@ impl Renderer {
         let cell_h = self.cell_h;
         let font_size_px = self.font_size_px;
         let font_family = self.app_config.font.family.clone();
+        let span_params = SpanBuildParams {
+            cell_h,
+            font_size: font_size_px,
+            font_family: &font_family,
+            cell_w,
+            fg_color,
+            palette: &palette,
+            selection: None, // set per-pane below
+        };
 
         for (pane_id, _pane_rect) in &layout_rects {
             let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
                 Some(p) => p,
                 None => continue,
             };
-            let grid = pane.terminal.grid.lock();
+            let mut grid = pane.terminal.grid.lock();
             let scrollback_len = grid.scrollback.len();
             let visible_rows = grid.rows;
             let current_gen = grid.generation;
@@ -329,60 +350,61 @@ impl Renderer {
             let pane_sel: Option<SelectionRange> = selection
                 .filter(|(sel_pane, _)| *sel_pane == *pane_id)
                 .and_then(|(_, sel)| if sel.is_empty() { None } else { Some(sel.normalized()) });
-            if !self.text_cache.get(pane_id).map_or(false, |(g, cp, s, _)| *g == current_gen && *cp == cursor_pos && *s == pane_sel) {
+
+            let cache_valid = self.text_cache.get(pane_id).map_or(false, |c| {
+                c.generation == current_gen && c.cursor_pos == cursor_pos && c.selection == pane_sel
+            });
+            if !cache_valid {
                 let cursor_text_color = parse_hex_color(&self.app_config.colors.cursor_text)
                     .unwrap_or(bg_color);
-                let span_buffers = build_span_buffers(
+                let mut pane_params = SpanBuildParams { selection: pane_sel, ..span_params };
+                pane_params.font_family = &font_family;
+                pane_params.palette = &palette;
+                let buffers = build_span_buffers(
                     &mut self.text_renderer.font_system,
                     &grid,
-                    cell_h,
-                    font_size_px,
-                    &font_family,
-                    cell_w,
-                    fg_color,
-                    &palette,
+                    &pane_params,
                     cursor_pos,
                     cursor_text_color,
-                    pane_sel,
                 );
-                self.text_cache.insert(*pane_id, (current_gen, cursor_pos, pane_sel, span_buffers));
+                self.text_cache.insert(*pane_id, TextCache {
+                    generation: current_gen,
+                    cursor_pos,
+                    selection: pane_sel,
+                    buffers,
+                });
             }
 
             // Rebuild scrollback span buffer cache if scrolled and cache is stale
             if scroll_offset > 0.5 && scrollback_len > 0 {
-                // Determine which scrollback rows are visible:
-                // y = pane_rect.y + row_idx * cell_h + scroll_offset
-                // row_idx = abs_row - scrollback_len (negative for scrollback)
-                // Visible: y >= pane_rect.y - cell_h  &&  y < pane_rect.y + pane_rect.height + cell_h
                 let rows_above = (scroll_offset / cell_h).ceil() as usize;
                 let first_abs = scrollback_len.saturating_sub(rows_above + visible_rows);
-                let last_abs = scrollback_len; // exclusive
+                let last_abs = scrollback_len;
 
                 let cache_key = (scrollback_len, first_abs);
-                let cache_hit = self
-                    .scrollback_text_cache
-                    .get(pane_id)
-                    .map_or(false, |(k, s, _)| *k == cache_key && *s == pane_sel);
+                let cache_hit = self.scrollback_text_cache.get(pane_id)
+                    .map_or(false, |c| c.key == cache_key && c.selection == pane_sel);
 
                 if !cache_hit {
-                    let rows_slice = &grid.scrollback[first_abs..last_abs];
-                    let sb_buffers = build_scrollback_span_buffers(
+                    let mut pane_params = SpanBuildParams { selection: pane_sel, ..span_params };
+                    pane_params.font_family = &font_family;
+                    pane_params.palette = &palette;
+                    let contiguous = grid.scrollback.make_contiguous();
+                    let rows_slice = &contiguous[first_abs..last_abs];
+                    let buffers = build_scrollback_span_buffers(
                         &mut self.text_renderer.font_system,
                         rows_slice,
                         first_abs,
                         scrollback_len,
-                        cell_h,
-                        font_size_px,
-                        &font_family,
-                        cell_w,
-                        fg_color,
-                        &palette,
-                        pane_sel,
+                        &pane_params,
                     );
-                    self.scrollback_text_cache.insert(*pane_id, (cache_key, pane_sel, sb_buffers));
+                    self.scrollback_text_cache.insert(*pane_id, ScrollbackCache {
+                        key: cache_key,
+                        selection: pane_sel,
+                        buffers,
+                    });
                 }
             } else {
-                // Not scrolled: evict scrollback cache to free memory
                 self.scrollback_text_cache.remove(pane_id);
             }
 
@@ -532,8 +554,8 @@ impl Renderer {
             };
 
             // Visible rows
-            if let Some((_, _, _, span_buffers)) = self.text_cache.get(pane_id) {
-                for sb in span_buffers {
+            if let Some(cache) = self.text_cache.get(pane_id) {
+                for sb in &cache.buffers {
                     let y = cy + sb.row_idx as f32 * cell_h + scroll_offset;
                     if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                         continue;
@@ -553,8 +575,8 @@ impl Renderer {
 
             // Scrollback rows (row_idx < 0, only when scrolled)
             if scroll_offset > 0.5 {
-                if let Some((_, _, sb_buffers)) = self.scrollback_text_cache.get(pane_id) {
-                    for sb in sb_buffers {
+                if let Some(cache) = self.scrollback_text_cache.get(pane_id) {
+                    for sb in &cache.buffers {
                         let y = cy + sb.row_idx as f32 * cell_h + scroll_offset;
                         if y + cell_h < pane_rect.y || y > pane_rect.y + pane_rect.height {
                             continue;

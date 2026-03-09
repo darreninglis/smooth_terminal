@@ -46,31 +46,27 @@ impl CursorAnimator {
         self.cell_h = h;
     }
 
+    /// Compute the 4 corner pixel positions (TL, TR, BR, BL) for a grid cell.
+    fn corner_targets(&self, col: usize, row: usize, pane_x: f32, pane_y: f32, scroll_offset: f32) -> [(f32, f32); 4] {
+        let px = pane_x + col as f32 * self.cell_w;
+        let py = pane_y + row as f32 * self.cell_h + scroll_offset;
+        [
+            (px, py),
+            (px + self.cell_w, py),
+            (px + self.cell_w, py + self.cell_h),
+            (px, py + self.cell_h),
+        ]
+    }
+
     /// Move cursor to new grid position. Sets spring targets.
     /// On trail mode: leading corners get higher omega.
-    pub fn move_to(
-        &mut self,
-        col: usize,
-        row: usize,
-        pane_x: f32,
-        pane_y: f32,
-        scroll_offset: f32,
-    ) {
+    pub fn move_to(&mut self, col: usize, row: usize, pane_x: f32, pane_y: f32, scroll_offset: f32) {
         let prev_col = self.target_col;
         let prev_row = self.target_row;
         self.target_col = col;
         self.target_row = row;
 
-        let px = pane_x + col as f32 * self.cell_w;
-        let py = pane_y + row as f32 * self.cell_h + scroll_offset;
-
-        // Corner positions: TL, TR, BR, BL
-        let targets = [
-            (px, py),
-            (px + self.cell_w, py),
-            (px + self.cell_w, py + self.cell_h),
-            (px, py + self.cell_h),
-        ];
+        let targets = self.corner_targets(col, row, pane_x, pane_y, scroll_offset);
 
         if self.trail_enabled {
             // Travel vector
@@ -80,18 +76,13 @@ impl CursorAnimator {
             // Assign omega based on dot product with travel direction (corners aligned with
             // travel direction get snappier response)
             // Corner vectors from center: TL=(-1,-1), TR=(1,-1), BR=(1,1), BL=(-1,1)
-            let corner_dirs: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+            const CORNER_DIRS: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
             let len = (dx * dx + dy * dy).sqrt().max(0.001);
             let dir = (dx / len, dy / len);
 
-            for (i, (cdx, cdy)) in corner_dirs.iter().enumerate() {
+            for (i, (cdx, cdy)) in CORNER_DIRS.iter().enumerate() {
                 let dot = cdx * dir.0 + cdy * dir.1;
-                // Leading corners (dot > 0) get higher omega
-                let corner_omega = if dot > 0.0 {
-                    self.base_omega * (1.0 + dot * 0.5)
-                } else {
-                    self.base_omega * (1.0 + dot * 0.3)
-                };
+                let corner_omega = self.base_omega * (1.0 + dot * if dot > 0.0 { 0.5 } else { 0.3 });
                 self.corners[i].x.omega = corner_omega;
                 self.corners[i].y.omega = corner_omega;
                 self.corners[i].set_target(targets[i].0, targets[i].1);
@@ -121,22 +112,10 @@ impl CursorAnimator {
     }
 
     /// Snap all corners to current target (no animation — use on init/resize)
-    pub fn snap_to(
-        &mut self,
-        col: usize,
-        row: usize,
-        pane_x: f32,
-        pane_y: f32,
-        scroll_offset: f32,
-    ) {
-        let px = pane_x + col as f32 * self.cell_w;
-        let py = pane_y + row as f32 * self.cell_h + scroll_offset;
-        let targets = [
-            (px, py),
-            (px + self.cell_w, py),
-            (px + self.cell_w, py + self.cell_h),
-            (px, py + self.cell_h),
-        ];
+    pub fn snap_to(&mut self, col: usize, row: usize, pane_x: f32, pane_y: f32, scroll_offset: f32) {
+        self.target_col = col;
+        self.target_row = row;
+        let targets = self.corner_targets(col, row, pane_x, pane_y, scroll_offset);
         for (i, (tx, ty)) in targets.iter().enumerate() {
             self.corners[i].set_target(*tx, *ty);
             self.corners[i].x.position = *tx;
@@ -144,8 +123,6 @@ impl CursorAnimator {
             self.corners[i].x.velocity = 0.0;
             self.corners[i].y.velocity = 0.0;
         }
-        self.target_col = col;
-        self.target_row = row;
     }
 
     pub fn is_warming_up(&self) -> bool {

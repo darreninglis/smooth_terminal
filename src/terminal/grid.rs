@@ -1,4 +1,5 @@
 use super::cell::{Cell, CellAttributes};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct TerminalGrid {
@@ -9,7 +10,7 @@ pub struct TerminalGrid {
     pub cursor_row: usize,
     pub scroll_top: usize,
     pub scroll_bottom: usize,
-    pub scrollback: Vec<Vec<Cell>>,
+    pub scrollback: VecDeque<Vec<Cell>>,
     pub scrollback_limit: usize,
     pub current_attrs: CellAttributes,
     pub title: String,
@@ -43,7 +44,7 @@ impl TerminalGrid {
             cursor_row: 0,
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
-            scrollback: Vec::new(),
+            scrollback: VecDeque::new(),
             scrollback_limit: 10000,
             current_attrs: CellAttributes::default(),
             title: String::new(),
@@ -65,7 +66,7 @@ impl TerminalGrid {
         let copy_cols = self.cols.min(cols);
         for r in 0..copy_rows {
             for c in 0..copy_cols {
-                new_cells[r][c] = self.cells[r][c].clone();
+                new_cells[r][c] = self.cells[r][c];
             }
         }
         self.cols = cols;
@@ -130,9 +131,9 @@ impl TerminalGrid {
             let row_idx = top + i;
             if row_idx < self.rows {
                 let row = self.cells[row_idx].clone();
-                self.scrollback.push(row);
+                self.scrollback.push_back(row);
                 if self.scrollback.len() > self.scrollback_limit {
-                    self.scrollback.remove(0);
+                    self.scrollback.pop_front();
                 }
             }
         }

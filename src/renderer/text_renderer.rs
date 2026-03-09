@@ -136,18 +136,6 @@ fn detect_hex_colors(row: &[crate::terminal::cell::Cell]) -> Vec<(usize, [f32; 4
     overrides
 }
 
-/// Build per-cell glyphon Buffers for a terminal grid.
-///
-/// Each visible cell gets its own single-character Buffer placed at exactly
-/// `col * cell_w`.  This guarantees the animated cursor — also positioned at
-/// `col * cell_w` — is always pixel-perfectly aligned with the rendered glyph,
-/// regardless of how the font's actual advance widths compare to `cell_w`.
-///
-/// The previous approach batched consecutive same-color cells into one Buffer
-/// anchored at `col_start * cell_w`, but accumulated glyph-advance rounding
-/// within a long span caused the cursor to drift by an amount proportional to
-/// the span's length (visible as the cursor being offset by the directory-name
-/// portion of the shell prompt).
 /// Selection range: ((start_row, start_col), (end_row, end_col)) in abs_row coords.
 pub type SelectionRange = ((usize, usize), (usize, usize));
 
@@ -164,97 +152,113 @@ fn is_cell_selected(sel: &SelectionRange, abs_row: usize, col: usize, cols: usiz
     col >= col_start && col <= col_end
 }
 
+/// Shared parameters for building span buffers, avoiding long parameter lists.
+#[derive(Clone, Copy)]
+pub struct SpanBuildParams<'a> {
+    pub cell_h: f32,
+    pub font_size: f32,
+    pub font_family: &'a str,
+    pub cell_w: f32,
+    pub fg_color: [f32; 4],
+    pub palette: &'a [[f32; 4]; 16],
+    pub selection: Option<SelectionRange>,
+}
+
+/// Resolve the foreground color for a single cell, accounting for selection,
+/// cursor position, hex color overrides, and reverse video.
+fn resolve_cell_fg(
+    cell: &crate::terminal::cell::Cell,
+    col_idx: usize,
+    abs_row: usize,
+    cols: usize,
+    hex_overrides: &[(usize, [f32; 4])],
+    params: &SpanBuildParams,
+    cursor: Option<(usize, usize, [f32; 4])>, // (row, col, cursor_text_color) — row is grid-local
+    grid_row: usize,
+) -> [f32; 4] {
+    let in_sel = params.selection.as_ref().map_or(false, |s| is_cell_selected(s, abs_row, col_idx, cols));
+    if in_sel {
+        return SELECTION_TEXT_COLOR;
+    }
+    if let Some((cr, cc, cursor_text_color)) = cursor {
+        if cr == grid_row && cc == col_idx {
+            return cursor_text_color;
+        }
+    }
+    if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
+        return *color;
+    }
+    if cell.attrs.reverse {
+        resolve_color(&cell.attrs.bg, params.fg_color, params.palette)
+    } else {
+        resolve_color(&cell.attrs.fg, params.fg_color, params.palette)
+    }
+}
+
+/// Build a SpanBuffer for a single cell. Returns None for empty/control chars.
+fn build_cell_span(
+    font_system: &mut FontSystem,
+    cell: &crate::terminal::cell::Cell,
+    col_idx: usize,
+    row_idx: i32,
+    color: Color,
+    metrics: Metrics,
+    family: Family,
+    cell_w: f32,
+    cell_h: f32,
+) -> SpanBuffer {
+    let char_cols = cell.ch.width().unwrap_or(1).max(1);
+    let buf_w = cell_w * (char_cols as f32 + 1.0);
+
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_size(font_system, Some(buf_w), Some(cell_h));
+    let attrs = Attrs::new().color(color).family(family);
+    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
+    buffer.shape_until_scroll(font_system, false);
+
+    let glyph_advance: f32 = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|g| g.w)
+        .sum();
+    let cell_span = cell_w * char_cols as f32;
+    let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
+
+    SpanBuffer { buffer, col_start: col_idx, row_idx, x_offset }
+}
+
+/// Build per-cell glyphon Buffers for visible terminal grid rows.
+/// Each cell gets its own Buffer placed at exactly `col * cell_w` to keep
+/// the cursor pixel-aligned with rendered glyphs.
 pub fn build_span_buffers(
     font_system: &mut FontSystem,
     grid: &crate::terminal::grid::TerminalGrid,
-    cell_h: f32,
-    font_size: f32,
-    font_family: &str,
-    cell_w: f32,
-    fg_color: [f32; 4],
-    palette: &[[f32; 4]; 16],
+    params: &SpanBuildParams,
     cursor_pos: Option<(usize, usize)>,
     cursor_text_color: [f32; 4],
-    selection: Option<SelectionRange>,
 ) -> Vec<SpanBuffer> {
-    let metrics = Metrics::new(font_size, cell_h);
-    // Shaping::Advanced enables proper multi-font fallback so that any
-    // characters not in the primary face (e.g. Nerd Font / Powerline glyphs)
-    // are resolved from system fonts rather than rendering as artefacts.
-    // Family::Monospace is the fallback when no name is configured.
-    let family = if font_family.is_empty() {
-        Family::Monospace
-    } else {
-        Family::Name(font_family)
-    };
+    let metrics = Metrics::new(params.font_size, params.cell_h);
+    let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
+    let scrollback_len = grid.scrollback.len();
     let mut result = Vec::new();
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
             continue;
         }
-
         let hex_overrides = detect_hex_colors(row);
+        let abs_row = scrollback_len + row_idx;
+        let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
         for (col_idx, cell) in row.iter().enumerate() {
-            // Skip empty cells (space / NUL) — rendered as background only.
-            if cell.is_empty() {
+            if cell.is_empty() || cell.ch.is_control() {
                 continue;
             }
-            // Skip control characters — they have no visible glyph and would
-            // produce glyphon atlas artefacts (spurious horizontal lines, etc.)
-            if cell.ch.is_control() {
-                continue;
-            }
-
-            let scrollback_len = grid.scrollback.len();
-            let abs_row = scrollback_len + row_idx;
-            let is_cursor = cursor_pos.map_or(false, |(r, c)| r == row_idx && c == col_idx);
-            let in_sel = selection.as_ref().map_or(false, |s| is_cell_selected(s, abs_row, col_idx, grid.cols));
-            let raw_fg = if in_sel {
-                SELECTION_TEXT_COLOR
-            } else if is_cursor {
-                cursor_text_color
-            } else if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
-                *color
-            } else if cell.attrs.reverse {
-                resolve_color(&cell.attrs.bg, fg_color, palette)
-            } else {
-                resolve_color(&cell.attrs.fg, fg_color, palette)
-            };
-            let cell_color = to_glyphon_color(raw_fg);
-
-            // One character per Buffer, placed at exactly col * cell_w.
-            // Wide (double-width) chars are given 2 × cell_w so they are not
-            // clipped; normal chars get cell_w + a one-cell safety margin.
-            let char_cols = cell.ch.width().unwrap_or(1).max(1);
-            let buf_w = cell_w * (char_cols as f32 + 1.0);
-
-            let mut buffer = Buffer::new(font_system, metrics);
-            buffer.set_size(font_system, Some(buf_w), Some(cell_h));
-            let attrs = Attrs::new().color(cell_color).family(family);
-            buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
-            buffer.shape_until_scroll(font_system, false);
-
-            // Center the glyph horizontally within its cell by computing the
-            // difference between the cell width and the actual glyph advance.
-            let glyph_advance: f32 = buffer
-                .layout_runs()
-                .flat_map(|run| run.glyphs.iter())
-                .map(|g| g.w)
-                .sum();
-            let cell_span = cell_w * char_cols as f32;
-            let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
-
-            result.push(SpanBuffer {
-                buffer,
-                col_start: col_idx,
-                row_idx: row_idx as i32,
-                x_offset,
-            });
+            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
+            let color = to_glyphon_color(raw_fg);
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
-
     result
 }
 
@@ -267,20 +271,10 @@ pub fn build_scrollback_span_buffers(
     rows: &[Vec<crate::terminal::cell::Cell>],
     scrollback_start: usize,
     scrollback_total_len: usize,
-    cell_h: f32,
-    font_size: f32,
-    font_family: &str,
-    cell_w: f32,
-    fg_color: [f32; 4],
-    palette: &[[f32; 4]; 16],
-    selection: Option<SelectionRange>,
+    params: &SpanBuildParams,
 ) -> Vec<SpanBuffer> {
-    let metrics = Metrics::new(font_size, cell_h);
-    let family = if font_family.is_empty() {
-        Family::Monospace
-    } else {
-        Family::Name(font_family)
-    };
+    let metrics = Metrics::new(params.font_size, params.cell_h);
+    let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let mut result = Vec::new();
 
     for (i, row) in rows.iter().enumerate() {
@@ -288,50 +282,17 @@ pub fn build_scrollback_span_buffers(
             continue;
         }
         let abs_row = scrollback_start + i;
-        let row_idx = abs_row as i64 - scrollback_total_len as i64; // always <= -1
-
+        let row_idx = abs_row as i64 - scrollback_total_len as i64;
         let hex_overrides = detect_hex_colors(row);
+        let cols = row.len();
 
         for (col_idx, cell) in row.iter().enumerate() {
-            if cell.is_empty() { continue; }
-            if cell.ch.is_control() { continue; }
-
-            let cols = row.len();
-            let in_sel = selection.as_ref().map_or(false, |s| is_cell_selected(s, abs_row, col_idx, cols));
-            let raw_fg = if in_sel {
-                SELECTION_TEXT_COLOR
-            } else if let Some((_, color)) = hex_overrides.iter().find(|(c, _)| *c == col_idx) {
-                *color
-            } else if cell.attrs.reverse {
-                resolve_color(&cell.attrs.bg, fg_color, palette)
-            } else {
-                resolve_color(&cell.attrs.fg, fg_color, palette)
-            };
-            let cell_color = to_glyphon_color(raw_fg);
-
-            let char_cols = cell.ch.width().unwrap_or(1).max(1);
-            let buf_w = cell_w * (char_cols as f32 + 1.0);
-
-            let mut buffer = Buffer::new(font_system, metrics);
-            buffer.set_size(font_system, Some(buf_w), Some(cell_h));
-            let attrs = Attrs::new().color(cell_color).family(family);
-            buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
-            buffer.shape_until_scroll(font_system, false);
-
-            let glyph_advance: f32 = buffer
-                .layout_runs()
-                .flat_map(|run| run.glyphs.iter())
-                .map(|g| g.w)
-                .sum();
-            let cell_span = cell_w * char_cols as f32;
-            let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
-
-            result.push(SpanBuffer {
-                buffer,
-                col_start: col_idx,
-                row_idx: row_idx as i32,
-                x_offset,
-            });
+            if cell.is_empty() || cell.ch.is_control() {
+                continue;
+            }
+            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
+            let color = to_glyphon_color(raw_fg);
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result

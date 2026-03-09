@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
     Default,
     Indexed(u8),
@@ -11,7 +11,7 @@ impl Default for Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CellAttributes {
     pub fg: Color,
     pub bg: Color,
@@ -25,7 +25,7 @@ pub struct CellAttributes {
     pub dim: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Cell {
     pub ch: char,
     pub attrs: CellAttributes,
