@@ -90,6 +90,8 @@ struct WindowState {
     mouse_button_down: bool,
     /// Currently hovered URL: (pane_id, abs_row, col_start, col_end_exclusive, url_string)
     hovered_url: Option<(usize, usize, usize, usize, String)>,
+    /// Last tab title set via NSWindowTab, used to avoid redundant ObjC calls.
+    last_tab_title: String,
 }
 
 impl WindowState {
@@ -112,6 +114,44 @@ impl WindowState {
 
     fn cell_dims(&self) -> (f32, f32) {
         (self.renderer.cell_w, self.renderer.cell_h)
+    }
+
+    /// Update the native macOS tab title to reflect the focused pane's cwd.
+    #[cfg(target_os = "macos")]
+    fn update_tab_title(&mut self) {
+        let cwd = match self.pane_tree.focused_cwd() {
+            Some(p) => p,
+            None => return,
+        };
+        let folder = cwd
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| cwd.to_string_lossy().into_owned());
+        if folder == self.last_tab_title {
+            return;
+        }
+        self.last_tab_title = folder.clone();
+
+        use objc2::{msg_send, msg_send_id};
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::NSString;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let Ok(handle) = self.window.window_handle() else { return };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+
+        unsafe {
+            let view = h.ns_view.as_ptr() as *const AnyObject;
+            let ns_window: Option<Retained<AnyObject>> = msg_send_id![&*view, window];
+            let Some(ns_window) = ns_window else { return };
+
+            let tab: Option<Retained<AnyObject>> = msg_send_id![&*ns_window, tab];
+            let Some(tab) = tab else { return };
+
+            let ns_title = NSString::from_str(&folder);
+            let _: () = msg_send![&*tab, setTitle: &*ns_title];
+        }
     }
 
     fn open_config_in_pane(&mut self) {
@@ -240,8 +280,11 @@ impl App {
         config: &Config,
         cwd: Option<&std::path::Path>,
     ) -> (WindowId, WindowState) {
+        const VERSION: &str = env!("APP_VERSION");
+        let title = format!("Smooth Terminal v{}", VERSION);
+
         let attrs = WindowAttributes::default()
-            .with_title(concat!("smooth terminal v", env!("APP_VERSION")))
+            .with_title(&title)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 config.window.width,
                 config.window.height,
@@ -300,6 +343,7 @@ impl App {
             selection_pane: 0,
             mouse_button_down: false,
             hovered_url: None,
+            last_tab_title: String::new(),
         };
 
         (window_id, state)
@@ -308,8 +352,8 @@ impl App {
     /// Open a new tab by creating an in-process window and attaching it as a
     /// macOS native tab of the given "parent" window.
     fn open_new_tab(&mut self, event_loop: &ActiveEventLoop, parent_id: WindowId) {
-        let cwd = self.windows.get(&parent_id).and_then(|s| s.pane_tree.focused_cwd());
-        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, cwd.as_deref());
+        let parent_cwd = self.windows.get(&parent_id).and_then(|s| s.pane_tree.focused_cwd());
+        let (new_id, new_state) = Self::create_window_state(event_loop, &self.config, parent_cwd.as_deref());
 
         #[cfg(target_os = "macos")]
         {
@@ -1292,6 +1336,10 @@ impl ApplicationHandler for App {
 
                     // Drain PTY output
                     state.pane_tree.drain_all_pty_output();
+
+                    // Window title is always "Smooth Terminal vX.Y.Z" — tab title shows cwd.
+                    #[cfg(target_os = "macos")]
+                    state.update_tab_title();
 
                     // Update cursor spring targets
                     let rect = state.content_rect(&self.config);
