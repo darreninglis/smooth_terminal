@@ -210,7 +210,11 @@ pub struct Config {
 
 impl Config {
     pub fn config_path() -> PathBuf {
-        let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("~/.config"));
+        let base = dirs::config_dir().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join(".config")
+        });
         base.join("smooth_terminal").join("config.toml")
     }
 

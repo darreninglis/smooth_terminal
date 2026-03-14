@@ -322,7 +322,7 @@ impl Renderer {
         };
 
         for (pane_id, _pane_rect) in &layout_rects {
-            let pane = match pane_tree.panes.iter().find(|p| p.id == *pane_id) {
+            let pane = match pane_tree.pane_by_id(*pane_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -428,7 +428,7 @@ impl Renderer {
         if let Some((sel_pane_id, sel)) = selection {
             if !sel.is_empty() {
                 if let Some(pane_rect) = layout_rects.iter().find(|(id, _)| *id == sel_pane_id).map(|(_, r)| r) {
-                    if let Some(pane) = pane_tree.panes.iter().find(|p| p.id == sel_pane_id) {
+                    if let Some(pane) = pane_tree.pane_by_id(sel_pane_id) {
                         let grid = pane.terminal.grid.lock();
                         let scrollback_len = grid.scrollback.len();
                         let visible_rows = grid.rows;
@@ -491,7 +491,7 @@ impl Renderer {
         // Hovered URL underline
         if let Some((url_pane_id, url_abs_row, url_col_start, url_col_end)) = hovered_url {
             if let Some(pane_rect) = layout_rects.iter().find(|(id, _)| *id == url_pane_id).map(|(_, r)| r) {
-                if let Some(pane) = pane_tree.panes.iter().find(|p| p.id == url_pane_id) {
+                if let Some(pane) = pane_tree.pane_by_id(url_pane_id) {
                     let grid = pane.terminal.grid.lock();
                     let scrollback_len = grid.scrollback.len();
                     drop(grid);

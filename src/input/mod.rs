@@ -34,12 +34,16 @@ pub enum InputAction {
     ResizePaneUp,
     ResizePaneDown,
     ToggleTheme,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
     None,
 }
 
 pub fn handle_key_event(
     event: &KeyEvent,
     modifiers: ModifiersState,
+    application_cursor_keys: bool,
 ) -> InputAction {
     if event.state != ElementState::Pressed {
         return InputAction::None;
@@ -118,6 +122,18 @@ pub fn handle_key_event(
             if cmd && !shift && !ctrl && lc == "v" {
                 return InputAction::Paste;
             }
+            // Cmd+= / Cmd++ : zoom in, Cmd+- : zoom out, Cmd+0 : reset zoom
+            if cmd && !ctrl && !alt {
+                if lc == "=" || lc == "+" {
+                    return InputAction::ZoomIn;
+                }
+                if lc == "-" {
+                    return InputAction::ZoomOut;
+                }
+                if lc == "0" {
+                    return InputAction::ZoomReset;
+                }
+            }
             // Cmd+1-9: switch to tab N
             if cmd && !shift && !ctrl && !alt {
                 if let Ok(n) = lc.parse::<usize>() {
@@ -171,7 +187,7 @@ pub fn handle_key_event(
             if cmd {
                 return InputAction::None;
             }
-            return InputAction::WriteBytes(encode_named_key(named, modifiers));
+            return InputAction::WriteBytes(encode_named_key(named, modifiers, application_cursor_keys));
         }
         _ => {}
     }
@@ -198,10 +214,14 @@ pub(crate) fn encode_key_character(ch: &str, ctrl: bool, alt: bool) -> Vec<u8> {
     ch.as_bytes().to_vec()
 }
 
-pub(crate) fn encode_named_key(key: &NamedKey, modifiers: ModifiersState) -> Vec<u8> {
+pub(crate) fn encode_named_key(key: &NamedKey, modifiers: ModifiersState, app_cursor_keys: bool) -> Vec<u8> {
     let shift = modifiers.shift_key();
     let ctrl = modifiers.control_key();
     let alt = modifiers.alt_key();
+
+    // xterm modifier encoding: 1=none, 2=shift, 3=alt, 4=shift+alt,
+    // 5=ctrl, 6=shift+ctrl, 7=ctrl+alt, 8=shift+ctrl+alt
+    let has_mods = shift || ctrl || alt;
 
     match key {
         NamedKey::Space => vec![b' '],
@@ -216,23 +236,16 @@ pub(crate) fn encode_named_key(key: &NamedKey, modifiers: ModifiersState) -> Vec
         NamedKey::Backspace => vec![0x7f],
         NamedKey::Delete => vec![0x1b, b'[', b'3', b'~'],
         NamedKey::Escape => vec![0x1b],
-        NamedKey::ArrowUp => {
-            if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'A'] }
-            else { vec![0x1b, b'[', b'A'] }
-        }
-        NamedKey::ArrowDown => {
-            if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'B'] }
-            else { vec![0x1b, b'[', b'B'] }
-        }
-        NamedKey::ArrowRight => {
-            if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'C'] }
-            else if alt { vec![0x1b, b'b'] }
-            else { vec![0x1b, b'[', b'C'] }
-        }
-        NamedKey::ArrowLeft => {
-            if ctrl { vec![0x1b, b'[', b'1', b';', b'5', b'D'] }
-            else if alt { vec![0x1b, b'f'] }
-            else { vec![0x1b, b'[', b'D'] }
+        NamedKey::ArrowUp | NamedKey::ArrowDown | NamedKey::ArrowRight | NamedKey::ArrowLeft => {
+            // Alt+Left/Right: word movement (readline/zsh)
+            if alt && !ctrl && !shift {
+                return match key {
+                    NamedKey::ArrowRight => vec![0x1b, b'b'],
+                    NamedKey::ArrowLeft => vec![0x1b, b'f'],
+                    _ => encode_arrow(*key, has_mods, shift, ctrl, alt, app_cursor_keys),
+                };
+            }
+            encode_arrow(*key, has_mods, shift, ctrl, alt, app_cursor_keys)
         }
         NamedKey::Home => vec![0x1b, b'[', b'H'],
         NamedKey::End => vec![0x1b, b'[', b'F'],
@@ -251,6 +264,32 @@ pub(crate) fn encode_named_key(key: &NamedKey, modifiers: ModifiersState) -> Vec
         NamedKey::F11 => vec![0x1b, b'[', b'2', b'3', b'~'],
         NamedKey::F12 => vec![0x1b, b'[', b'2', b'4', b'~'],
         _ => vec![],
+    }
+}
+
+/// Encode arrow keys with proper modifier and DECCKM support.
+fn encode_arrow(key: NamedKey, has_mods: bool, shift: bool, ctrl: bool, alt: bool, app_cursor_keys: bool) -> Vec<u8> {
+    let suffix = match key {
+        NamedKey::ArrowUp => b'A',
+        NamedKey::ArrowDown => b'B',
+        NamedKey::ArrowRight => b'C',
+        NamedKey::ArrowLeft => b'D',
+        _ => unreachable!(),
+    };
+    if has_mods {
+        // xterm modifier parameter: shift=2, alt=3, shift+alt=4,
+        // ctrl=5, shift+ctrl=6, ctrl+alt=7, shift+ctrl+alt=8
+        let modifier = 1
+            + if shift { 1 } else { 0 }
+            + if alt { 2 } else { 0 }
+            + if ctrl { 4 } else { 0 };
+        let m = b'0' + modifier;
+        vec![0x1b, b'[', b'1', b';', m, suffix]
+    } else if app_cursor_keys {
+        // DECCKM: ESC O A instead of ESC [ A
+        vec![0x1b, b'O', suffix]
+    } else {
+        vec![0x1b, b'[', suffix]
     }
 }
 
@@ -311,98 +350,141 @@ mod tests {
 
     #[test]
     fn enter_is_cr() {
-        assert_eq!(encode_named_key(&NamedKey::Enter, mods(false, false, false)), vec![b'\r']);
+        assert_eq!(encode_named_key(&NamedKey::Enter, mods(false, false, false), false), vec![b'\r']);
     }
 
     #[test]
     fn tab_is_tab() {
-        assert_eq!(encode_named_key(&NamedKey::Tab, mods(false, false, false)), vec![b'\t']);
+        assert_eq!(encode_named_key(&NamedKey::Tab, mods(false, false, false), false), vec![b'\t']);
     }
 
     #[test]
     fn shift_tab_is_backtab() {
-        assert_eq!(encode_named_key(&NamedKey::Tab, mods(true, false, false)), vec![0x1b, b'[', b'Z']);
+        assert_eq!(encode_named_key(&NamedKey::Tab, mods(true, false, false), false), vec![0x1b, b'[', b'Z']);
     }
 
     #[test]
     fn backspace_is_0x7f() {
-        assert_eq!(encode_named_key(&NamedKey::Backspace, mods(false, false, false)), vec![0x7f]);
+        assert_eq!(encode_named_key(&NamedKey::Backspace, mods(false, false, false), false), vec![0x7f]);
     }
 
     #[test]
     fn delete_sequence() {
-        assert_eq!(encode_named_key(&NamedKey::Delete, mods(false, false, false)), vec![0x1b, b'[', b'3', b'~']);
+        assert_eq!(encode_named_key(&NamedKey::Delete, mods(false, false, false), false), vec![0x1b, b'[', b'3', b'~']);
     }
 
     #[test]
     fn escape_is_0x1b() {
-        assert_eq!(encode_named_key(&NamedKey::Escape, mods(false, false, false)), vec![0x1b]);
+        assert_eq!(encode_named_key(&NamedKey::Escape, mods(false, false, false), false), vec![0x1b]);
     }
 
     #[test]
     fn arrow_up() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, false, false)), vec![0x1b, b'[', b'A']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, false, false), false), vec![0x1b, b'[', b'A']);
     }
 
     #[test]
     fn arrow_down() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowDown, mods(false, false, false)), vec![0x1b, b'[', b'B']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowDown, mods(false, false, false), false), vec![0x1b, b'[', b'B']);
     }
 
     #[test]
     fn arrow_right() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowRight, mods(false, false, false)), vec![0x1b, b'[', b'C']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowRight, mods(false, false, false), false), vec![0x1b, b'[', b'C']);
     }
 
     #[test]
     fn arrow_left() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowLeft, mods(false, false, false)), vec![0x1b, b'[', b'D']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowLeft, mods(false, false, false), false), vec![0x1b, b'[', b'D']);
     }
 
     #[test]
     fn ctrl_arrow_up() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, true, false)), vec![0x1b, b'[', b'1', b';', b'5', b'A']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, true, false), false), vec![0x1b, b'[', b'1', b';', b'5', b'A']);
     }
 
     #[test]
     fn ctrl_arrow_down() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowDown, mods(false, true, false)), vec![0x1b, b'[', b'1', b';', b'5', b'B']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowDown, mods(false, true, false), false), vec![0x1b, b'[', b'1', b';', b'5', b'B']);
     }
 
     #[test]
     fn alt_arrow_right_is_word_forward() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowRight, mods(false, false, true)), vec![0x1b, b'b']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowRight, mods(false, false, true), false), vec![0x1b, b'b']);
     }
 
     #[test]
     fn alt_arrow_left_is_word_backward() {
-        assert_eq!(encode_named_key(&NamedKey::ArrowLeft, mods(false, false, true)), vec![0x1b, b'f']);
+        assert_eq!(encode_named_key(&NamedKey::ArrowLeft, mods(false, false, true), false), vec![0x1b, b'f']);
     }
 
     #[test]
     fn f1_to_f4() {
-        assert_eq!(encode_named_key(&NamedKey::F1, mods(false, false, false)), vec![0x1b, b'O', b'P']);
-        assert_eq!(encode_named_key(&NamedKey::F2, mods(false, false, false)), vec![0x1b, b'O', b'Q']);
-        assert_eq!(encode_named_key(&NamedKey::F3, mods(false, false, false)), vec![0x1b, b'O', b'R']);
-        assert_eq!(encode_named_key(&NamedKey::F4, mods(false, false, false)), vec![0x1b, b'O', b'S']);
+        assert_eq!(encode_named_key(&NamedKey::F1, mods(false, false, false), false), vec![0x1b, b'O', b'P']);
+        assert_eq!(encode_named_key(&NamedKey::F2, mods(false, false, false), false), vec![0x1b, b'O', b'Q']);
+        assert_eq!(encode_named_key(&NamedKey::F3, mods(false, false, false), false), vec![0x1b, b'O', b'R']);
+        assert_eq!(encode_named_key(&NamedKey::F4, mods(false, false, false), false), vec![0x1b, b'O', b'S']);
     }
 
     #[test]
     fn f5_to_f12() {
-        assert_eq!(encode_named_key(&NamedKey::F5, mods(false, false, false)), vec![0x1b, b'[', b'1', b'5', b'~']);
-        assert_eq!(encode_named_key(&NamedKey::F12, mods(false, false, false)), vec![0x1b, b'[', b'2', b'4', b'~']);
+        assert_eq!(encode_named_key(&NamedKey::F5, mods(false, false, false), false), vec![0x1b, b'[', b'1', b'5', b'~']);
+        assert_eq!(encode_named_key(&NamedKey::F12, mods(false, false, false), false), vec![0x1b, b'[', b'2', b'4', b'~']);
     }
 
     #[test]
     fn home_end_pageup_pagedown() {
-        assert_eq!(encode_named_key(&NamedKey::Home, mods(false, false, false)), vec![0x1b, b'[', b'H']);
-        assert_eq!(encode_named_key(&NamedKey::End, mods(false, false, false)), vec![0x1b, b'[', b'F']);
-        assert_eq!(encode_named_key(&NamedKey::PageUp, mods(false, false, false)), vec![0x1b, b'[', b'5', b'~']);
-        assert_eq!(encode_named_key(&NamedKey::PageDown, mods(false, false, false)), vec![0x1b, b'[', b'6', b'~']);
+        assert_eq!(encode_named_key(&NamedKey::Home, mods(false, false, false), false), vec![0x1b, b'[', b'H']);
+        assert_eq!(encode_named_key(&NamedKey::End, mods(false, false, false), false), vec![0x1b, b'[', b'F']);
+        assert_eq!(encode_named_key(&NamedKey::PageUp, mods(false, false, false), false), vec![0x1b, b'[', b'5', b'~']);
+        assert_eq!(encode_named_key(&NamedKey::PageDown, mods(false, false, false), false), vec![0x1b, b'[', b'6', b'~']);
     }
 
     #[test]
     fn space_is_space() {
-        assert_eq!(encode_named_key(&NamedKey::Space, mods(false, false, false)), vec![b' ']);
+        assert_eq!(encode_named_key(&NamedKey::Space, mods(false, false, false), false), vec![b' ']);
+    }
+
+    // ── DECCKM (application cursor keys) ─────────────────────────────────
+
+    #[test]
+    fn arrow_up_decckm() {
+        // Application cursor keys: ESC O A instead of ESC [ A
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, false, false), true), vec![0x1b, b'O', b'A']);
+    }
+
+    #[test]
+    fn arrow_down_decckm() {
+        assert_eq!(encode_named_key(&NamedKey::ArrowDown, mods(false, false, false), true), vec![0x1b, b'O', b'B']);
+    }
+
+    #[test]
+    fn arrow_right_decckm() {
+        assert_eq!(encode_named_key(&NamedKey::ArrowRight, mods(false, false, false), true), vec![0x1b, b'O', b'C']);
+    }
+
+    #[test]
+    fn arrow_left_decckm() {
+        assert_eq!(encode_named_key(&NamedKey::ArrowLeft, mods(false, false, false), true), vec![0x1b, b'O', b'D']);
+    }
+
+    #[test]
+    fn ctrl_arrow_ignores_decckm() {
+        // Modifiers always use CSI format, even with DECCKM
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(false, true, false), true), vec![0x1b, b'[', b'1', b';', b'5', b'A']);
+    }
+
+    // ── Shift+Ctrl modifier encoding ─────────────────────────────────────
+
+    #[test]
+    fn shift_ctrl_arrow_up() {
+        // Shift+Ctrl = modifier 6
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(true, true, false), false), vec![0x1b, b'[', b'1', b';', b'6', b'A']);
+    }
+
+    #[test]
+    fn shift_arrow_up() {
+        // Shift alone = modifier 2
+        assert_eq!(encode_named_key(&NamedKey::ArrowUp, mods(true, false, false), false), vec![0x1b, b'[', b'1', b';', b'2', b'A']);
     }
 }

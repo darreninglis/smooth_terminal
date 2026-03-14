@@ -40,12 +40,20 @@ impl PaneTree {
         })
     }
 
+    pub fn pane_by_id(&self, id: usize) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.id == id)
+    }
+
+    pub fn pane_by_id_mut(&mut self, id: usize) -> Option<&mut Pane> {
+        self.panes.iter_mut().find(|p| p.id == id)
+    }
+
     pub fn focused_pane(&self) -> Option<&Pane> {
-        self.panes.iter().find(|p| p.id == self.focused_id)
+        self.pane_by_id(self.focused_id)
     }
 
     pub fn focused_pane_mut(&mut self) -> Option<&mut Pane> {
-        self.panes.iter_mut().find(|p| p.id == self.focused_id)
+        self.pane_by_id_mut(self.focused_id)
     }
 
     pub fn focused_cwd(&self) -> Option<PathBuf> {

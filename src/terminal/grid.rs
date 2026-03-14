@@ -21,6 +21,12 @@ pub struct TerminalGrid {
     pub generation: u64,
     /// Whether bracketed paste mode (DEC mode 2004) is active.
     pub bracketed_paste: bool,
+    /// Whether application cursor keys mode (DECCKM / DEC mode 1) is active.
+    /// When true, arrow keys send SS3 (ESC O) instead of CSI (ESC [).
+    pub application_cursor_keys: bool,
+    /// Response queue: bytes the terminal needs to send back to the PTY
+    /// (e.g. DA response). Drained each frame by the app.
+    pub response_queue: Vec<Vec<u8>>,
     /// Whether the cursor is visible (DECTCEM / DEC mode 25). TUI apps hide
     /// the terminal cursor and draw their own; we must respect this so our
     /// animated cursor doesn't render in the wrong place.
@@ -51,6 +57,8 @@ impl TerminalGrid {
             pending_wrap: false,
             generation: 0,
             bracketed_paste: false,
+            application_cursor_keys: false,
+            response_queue: Vec::new(),
             cursor_visible: true,
             reverse_cursor: None,
         }
@@ -120,17 +128,18 @@ impl TerminalGrid {
         self.generation = self.generation.wrapping_add(1);
         let top = self.scroll_top;
         let bottom = self.scroll_bottom.min(self.rows - 1);
-        if top >= bottom {
+        if top > bottom {
             return;
         }
         let region_height = bottom - top + 1;
         let count = count.min(region_height);
 
-        // Move scrolled-out rows to scrollback
+        // Move scrolled-out rows to scrollback (swap in blank row, avoid clone)
         for i in 0..count {
             let row_idx = top + i;
             if row_idx < self.rows {
-                let row = self.cells[row_idx].clone();
+                let blank = vec![Cell::default(); self.cols];
+                let row = std::mem::replace(&mut self.cells[row_idx], blank);
                 self.scrollback.push_back(row);
                 if self.scrollback.len() > self.scrollback_limit {
                     self.scrollback.pop_front();
@@ -138,11 +147,11 @@ impl TerminalGrid {
             }
         }
 
-        // Shift rows up
+        // Shift rows up using swap (avoids Vec allocation per row)
         for r in top..(bottom + 1 - count) {
             let src = r + count;
             if src <= bottom && src < self.rows {
-                self.cells[r] = self.cells[src].clone();
+                self.cells.swap(r, src);
             }
         }
         // Clear newly exposed rows at bottom
@@ -158,7 +167,7 @@ impl TerminalGrid {
         self.generation = self.generation.wrapping_add(1);
         let top = self.scroll_top;
         let bottom = self.scroll_bottom.min(self.rows - 1);
-        if top >= bottom {
+        if top > bottom {
             return;
         }
         let region_height = bottom - top + 1;
@@ -168,7 +177,7 @@ impl TerminalGrid {
             let dst = r;
             let src = r.wrapping_sub(count);
             if src >= top && src <= bottom && dst < self.rows {
-                self.cells[dst] = self.cells[src].clone();
+                self.cells.swap(dst, src);
             } else if dst >= top && dst < top + count && dst < self.rows {
                 self.clear_line(dst);
             }
@@ -387,8 +396,8 @@ impl TerminalGrid {
             for col in col_start..col_end {
                 if col < row.len() {
                     let ch = row[col].ch;
+                    // Skip null cells (second half of wide characters)
                     if ch != '\0' { line.push(ch); }
-                    else { line.push(' '); }
                 }
             }
             // Trim trailing spaces from each line
@@ -666,14 +675,15 @@ mod tests {
     }
 
     #[test]
-    fn extract_selection_null_to_space() {
+    fn extract_selection_null_skipped() {
         let mut g = TerminalGrid::new(10, 3);
         g.set_cell(0, 0, 'A');
-        // cells[0][1] is default '\0'
+        // cells[0][1] is default '\0' (e.g. second half of wide char)
         g.set_cell(2, 0, 'B');
         let slen = g.scrollback.len();
         let text = g.extract_selection((slen, 0), (slen, 2));
-        assert_eq!(text, "A B");
+        // Null cells are skipped (they represent wide-char placeholders)
+        assert_eq!(text, "AB");
     }
 
     #[test]

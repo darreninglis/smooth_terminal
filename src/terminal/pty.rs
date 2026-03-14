@@ -96,7 +96,7 @@ impl PtyHandle {
         let mut reader = master.try_clone_reader()?;
 
         std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 32768];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,

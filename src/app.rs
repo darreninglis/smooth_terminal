@@ -179,7 +179,7 @@ impl WindowState {
             .map(|s| s.pixel_offset())
             .unwrap_or(0.0);
 
-        let pane = self.pane_tree.panes.iter().find(|p| p.id == pane_id)?;
+        let pane = self.pane_tree.pane_by_id(pane_id)?;
         let grid = pane.terminal.grid.lock();
         let scrollback_len = grid.scrollback.len();
         let visible_rows = grid.rows;
@@ -210,7 +210,7 @@ impl WindowState {
     /// Check if a URL exists at the given cell position in a pane.
     /// Returns (col_start, col_end_exclusive, url_string) if found.
     fn url_at_cell(&self, pane_id: usize, abs_row: usize, col: usize) -> Option<(usize, usize, String)> {
-        let pane = self.pane_tree.panes.iter().find(|p| p.id == pane_id)?;
+        let pane = self.pane_tree.pane_by_id(pane_id)?;
         let grid = pane.terminal.grid.lock();
         let scrollback_len = grid.scrollback.len();
 
@@ -272,6 +272,19 @@ impl App {
             pending_close: Vec::new(),
             #[cfg(target_os = "macos")]
             _event_monitor: None,
+        }
+    }
+
+    fn apply_config_to_all_windows(&mut self) {
+        let new_config = self.config.clone();
+        for state in self.windows.values_mut() {
+            let scale = state.window.scale_factor() as f32;
+            let metrics_changed = state.renderer.apply_config(new_config.clone(), scale);
+            if metrics_changed {
+                let rect = state.content_rect(&new_config);
+                let layout_rects = state.pane_tree.layout.compute_rects(rect);
+                state.pane_tree.resize_panes(&layout_rects, state.renderer.cell_w, state.renderer.cell_h);
+            }
         }
     }
 
@@ -878,12 +891,17 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                let modifiers = self
+                let (modifiers, app_cursor_keys) = self
                     .windows
                     .get(&window_id)
-                    .map(|s| s.modifiers)
+                    .map(|s| {
+                        let ack = s.pane_tree.focused_pane()
+                            .map(|p| p.terminal.grid.lock().application_cursor_keys)
+                            .unwrap_or(false);
+                        (s.modifiers, ack)
+                    })
                     .unwrap_or_default();
-                let action = handle_key_event(&event, modifiers);
+                let action = handle_key_event(&event, modifiers, app_cursor_keys);
                 match action {
                     InputAction::WriteBytes(bytes) => {
                         if !bytes.is_empty() {
@@ -1038,7 +1056,7 @@ impl ApplicationHandler for App {
                     InputAction::SelectAll => {
                         if let Some(state) = self.windows.get_mut(&window_id) {
                             let focused_id = state.pane_tree.focused_id;
-                            if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == focused_id) {
+                            if let Some(pane) = state.pane_tree.pane_by_id(focused_id) {
                                 let grid = pane.terminal.grid.lock();
                                 let range = grid.cursor_line_input_range()
                                     .or_else(|| grid.full_content_range());
@@ -1059,7 +1077,7 @@ impl ApplicationHandler for App {
                             if let Some(sel) = &state.selection {
                                 if !sel.is_empty() {
                                     let pane_id = state.selection_pane;
-                                    if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == pane_id) {
+                                    if let Some(pane) = state.pane_tree.pane_by_id(pane_id) {
                                         let grid = pane.terminal.grid.lock();
                                         let (start, end) = sel.normalized();
                                         let text = grid.extract_selection(start, end);
@@ -1078,7 +1096,7 @@ impl ApplicationHandler for App {
                             if let Some(sel) = &state.selection {
                                 if !sel.is_empty() {
                                     let pane_id = state.selection_pane;
-                                    if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == pane_id) {
+                                    if let Some(pane) = state.pane_tree.pane_by_id(pane_id) {
                                         let grid = pane.terminal.grid.lock();
                                         let (start, end) = sel.normalized();
                                         let text = grid.extract_selection(start, end);
@@ -1160,6 +1178,18 @@ impl ApplicationHandler for App {
                                 state.pane_tree.resize_panes(&layout_rects, state.renderer.cell_w, state.renderer.cell_h);
                             }
                         }
+                    }
+                    InputAction::ZoomIn => {
+                        self.config.font.size = (self.config.font.size + 1.0).min(72.0);
+                        self.apply_config_to_all_windows();
+                    }
+                    InputAction::ZoomOut => {
+                        self.config.font.size = (self.config.font.size - 1.0).max(6.0);
+                        self.apply_config_to_all_windows();
+                    }
+                    InputAction::ZoomReset => {
+                        self.config.font.size = Config::default().font.size;
+                        self.apply_config_to_all_windows();
                     }
                     InputAction::None => {}
                 }
@@ -1349,7 +1379,7 @@ impl ApplicationHandler for App {
                         state.pane_tree.resize_panes(&layout_rects, cw, ch);
                     }
                     for (pane_id, pane_rect) in &layout_rects {
-                        if let Some(pane) = state.pane_tree.panes.iter().find(|p| p.id == *pane_id) {
+                        if let Some(pane) = state.pane_tree.pane_by_id(*pane_id) {
                             let mut grid = pane.terminal.grid.lock();
                             let col = grid.cursor_col;
                             let row = grid.cursor_row;

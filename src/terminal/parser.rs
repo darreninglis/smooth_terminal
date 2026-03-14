@@ -209,7 +209,14 @@ impl Perform for VtePerformer {
                         }
                         grid.clear_line_range(cr, 0, cc + 1);
                     }
-                    2 | 3 => {
+                    2 => {
+                        for r in 0..rows {
+                            grid.clear_line(r);
+                        }
+                    }
+                    3 => {
+                        // Clear scrollback + visible
+                        grid.scrollback.clear();
                         for r in 0..rows {
                             grid.clear_line(r);
                         }
@@ -333,8 +340,11 @@ impl Perform for VtePerformer {
             (None, 'r') => {
                 let top = ps.first().copied().unwrap_or(1).max(1) as usize;
                 let bottom = ps.get(1).copied().unwrap_or(rows as u16) as usize;
-                grid.scroll_top = (top - 1).min(rows - 1);
-                grid.scroll_bottom = (bottom - 1).min(rows - 1);
+                let top_idx = (top - 1).min(rows - 1);
+                let bottom_idx = (bottom - 1).min(rows - 1);
+                // Ensure top <= bottom per ANSI spec; ignore invalid regions
+                grid.scroll_top = top_idx.min(bottom_idx);
+                grid.scroll_bottom = top_idx.max(bottom_idx);
                 grid.cursor_row = if self.origin_mode { grid.scroll_top } else { 0 };
                 grid.cursor_col = 0;
                 grid.pending_wrap = false;
@@ -359,7 +369,7 @@ impl Perform for VtePerformer {
             (Some(b'?'), 'h') => {
                 for p in ps {
                     match p {
-                        1 => {} // DECCKM — application cursor keys (ignore for now)
+                        1 => { grid.application_cursor_keys = true; }
                         7 => { self.auto_wrap = true; }
                         25 => { grid.cursor_visible = true; }
                         1049 => {
@@ -380,6 +390,7 @@ impl Perform for VtePerformer {
             (Some(b'?'), 'l') => {
                 for p in ps {
                     match p {
+                        1 => { grid.application_cursor_keys = false; }
                         7 => { self.auto_wrap = false; }
                         25 => { grid.cursor_visible = false; }
                         2004 => { grid.bracketed_paste = false; }
@@ -399,6 +410,31 @@ impl Perform for VtePerformer {
                         }
                         _ => {}
                     }
+                }
+            }
+            // Send Device Attributes (DA) — respond with VT220 identity
+            (None, 'c') | (Some(b'?'), 'c') => {
+                // ESC[?62;4c  → VT220 with Sixel support flag
+                grid.response_queue.push(b"\x1b[?62;4c".to_vec());
+            }
+            // Device Status Report (DSR)
+            (None, 'n') => {
+                let n = ps.first().copied().unwrap_or(0);
+                match n {
+                    5 => {
+                        // Status report: "OK"
+                        grid.response_queue.push(b"\x1b[0n".to_vec());
+                    }
+                    6 => {
+                        // Cursor position report (1-based)
+                        let response = format!(
+                            "\x1b[{};{}R",
+                            grid.cursor_row + 1,
+                            grid.cursor_col + 1
+                        );
+                        grid.response_queue.push(response.into_bytes());
+                    }
+                    _ => {}
                 }
             }
             _ => {}

@@ -35,6 +35,14 @@ impl Terminal {
         for chunk in chunks {
             self.parser.advance(&mut self.performer, &chunk);
         }
+        // Send any queued responses (DA, DSR, etc.) back to the PTY
+        let responses: Vec<Vec<u8>> = {
+            let mut grid = self.grid.lock();
+            std::mem::take(&mut grid.response_queue)
+        };
+        for response in responses {
+            let _ = self.pty.write_bytes(&response);
+        }
     }
 
     pub fn write_input(&mut self, data: &[u8]) -> Result<()> {

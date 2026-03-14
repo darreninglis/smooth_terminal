@@ -75,6 +75,34 @@ pub fn setup_menubar() {
                     }
                 }
             }
+
+            // ── Remove key equivalents from winit's default Edit menu ────────
+            // winit creates an Edit menu with Copy/Paste/Select All items whose
+            // key equivalents (Cmd+C, Cmd+V, Cmd+A) intercept keyboard events
+            // before they reach our KeyboardInput handler.  Strip them so we
+            // handle these shortcuts ourselves.
+            let n_items = main_menu.numberOfItems();
+            for i in 0..n_items {
+                if let Some(menu_item) = main_menu.itemAtIndex(i) {
+                    let submenu: Option<Retained<NSMenu>> =
+                        msg_send_id![&*menu_item, submenu];
+                    if let Some(sub) = submenu {
+                        let title: Retained<objc2_foundation::NSString> =
+                            msg_send_id![&*sub, title];
+                        let title_str = title.to_string();
+                        if title_str == "Edit" {
+                            let empty_key = NSString::from_str("");
+                            let sub_count = sub.numberOfItems();
+                            for j in 0..sub_count {
+                                if let Some(item) = sub.itemAtIndex(j) {
+                                    let _: () = msg_send![&*item, setKeyEquivalent: &*empty_key];
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // Keep opener alive — it is the target for all config menu items.
