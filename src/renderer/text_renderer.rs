@@ -166,6 +166,7 @@ pub struct SpanBuildParams<'a> {
 
 /// Resolve the foreground color for a single cell, accounting for selection,
 /// cursor position, hex color overrides, and reverse video.
+#[inline(always)]
 fn resolve_cell_fg(
     cell: &crate::terminal::cell::Cell,
     col_idx: usize,
@@ -196,6 +197,7 @@ fn resolve_cell_fg(
 }
 
 /// Build a SpanBuffer for a single cell. Returns None for empty/control chars.
+#[inline(always)]
 fn build_cell_span(
     font_system: &mut FontSystem,
     cell: &crate::terminal::cell::Cell,
@@ -297,6 +299,7 @@ pub fn build_scrollback_span_buffers(
     result
 }
 
+#[inline(always)]
 pub fn to_glyphon_color(c: [f32; 4]) -> Color {
     Color::rgba(
         (c[0] * 255.0) as u8,
