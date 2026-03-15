@@ -246,7 +246,8 @@ pub fn build_span_buffers(
         if row.iter().all(|c| c.is_empty()) {
             continue;
         }
-        let hex_overrides = detect_hex_colors(row);
+        let has_hash = row.iter().any(|c| c.ch == '#');
+        let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let abs_row = scrollback_len + row_idx;
         let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
@@ -283,7 +284,8 @@ pub fn build_scrollback_span_buffers(
         }
         let abs_row = scrollback_start + i;
         let row_idx = abs_row as i64 - scrollback_total_len as i64;
-        let hex_overrides = detect_hex_colors(row);
+        let has_hash = row.iter().any(|c| c.ch == '#');
+        let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let cols = row.len();
 
         for (col_idx, cell) in row.iter().enumerate() {
