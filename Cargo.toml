@@ -36,3 +36,4 @@ block2 = "0.5"
 [profile.release]
 opt-level = 3
 lto = true
+codegen-units = 1
