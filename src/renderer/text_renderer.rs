@@ -162,7 +162,6 @@ pub struct SpanBuildParams<'a> {
     pub fg_color: [f32; 4],
     pub palette: &'a [[f32; 4]; 16],
     pub selection: Option<SelectionRange>,
-    pub mono_x_offset: f32,
 }
 
 /// Resolve the foreground color for a single cell, accounting for selection,
@@ -207,7 +206,6 @@ fn build_cell_span(
     family: Family,
     cell_w: f32,
     cell_h: f32,
-    mono_x_offset: f32,
 ) -> SpanBuffer {
     let char_cols = cell.ch.width().unwrap_or(1).max(1);
     let buf_w = cell_w * (char_cols as f32 + 1.0);
@@ -218,19 +216,13 @@ fn build_cell_span(
     buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Basic);
     buffer.shape_until_scroll(font_system, false);
 
-    // For single-width chars, use the pre-computed monospace offset.
-    // For wide chars (CJK), compute dynamically.
-    let x_offset = if char_cols == 1 {
-        mono_x_offset
-    } else {
-        let glyph_advance: f32 = buffer
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter())
-            .map(|g| g.w)
-            .sum();
-        let cell_span = cell_w * char_cols as f32;
-        ((cell_span - glyph_advance) / 2.0).max(0.0)
-    };
+    let glyph_advance: f32 = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|g| g.w)
+        .sum();
+    let cell_span = cell_w * char_cols as f32;
+    let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
 
     SpanBuffer { buffer, col_start: col_idx, row_idx, x_offset }
 }
@@ -262,7 +254,7 @@ pub fn build_span_buffers(
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
             let color = to_glyphon_color(raw_fg);
-            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h, params.mono_x_offset));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result
@@ -299,7 +291,7 @@ pub fn build_scrollback_span_buffers(
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
             let color = to_glyphon_color(raw_fg);
-            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h, params.mono_x_offset));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result

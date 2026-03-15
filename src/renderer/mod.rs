@@ -88,8 +88,6 @@ pub struct Renderer {
     pub font_size_px: f32,
     pub scale_factor: f32,
     pub app_config: Config,
-    /// Pre-computed glyph centering offset for single-width monospace chars.
-    pub mono_x_offset: f32,
 }
 
 impl Renderer {
@@ -190,10 +188,6 @@ impl Renderer {
             &app_config.font.family,
         );
 
-        // Pre-compute glyph centering offset: (cell_w - glyph_advance) / 2.0
-        // For a true monospace font, this is 0.0 since cell_w = glyph_advance.
-        let mono_x_offset = 0.0f32; // cell_w is measured from glyph advance
-
         Self {
             surface,
             device,
@@ -213,7 +207,6 @@ impl Renderer {
             font_size_px,
             scale_factor,
             app_config,
-            mono_x_offset,
         }
     }
 
@@ -324,7 +317,6 @@ impl Renderer {
         let cell_h = self.cell_h;
         let font_size_px = self.font_size_px;
         let font_family = &self.app_config.font.family;
-        let mono_x_offset = self.mono_x_offset;
         let span_params = SpanBuildParams {
             cell_h,
             font_size: font_size_px,
@@ -333,7 +325,6 @@ impl Renderer {
             fg_color,
             palette: &palette,
             selection: None, // set per-pane below
-            mono_x_offset,
         };
 
         for (pane_id, _pane_rect) in &layout_rects {
