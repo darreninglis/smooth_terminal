@@ -241,12 +241,12 @@ pub fn build_span_buffers(
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let scrollback_len = grid.scrollback.len();
     let mut result = Vec::with_capacity(grid.rows * grid.cols / 2);
-    let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         let has_hash = row.iter().any(|c| c.ch == '#');
         let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let abs_row = scrollback_len + row_idx;
+        let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
