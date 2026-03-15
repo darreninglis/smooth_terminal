@@ -4,4 +4,3 @@
 {"run": 6, "description": "skip hex color detection entirely", "metric_name": "frame_time_us", "metric_value": 10220, "baseline": 14971, "best_before": 10711, "status": "reverted", "commit": "ce5481a", "timestamp": "2026-03-15T00:24:12Z"}
 {"run": 7, "description": "lazy hex color detection - only scan rows with #", "metric_name": "frame_time_us", "metric_value": 10388, "baseline": 14971, "best_before": 10711, "status": "kept", "commit": "a822a2d", "timestamp": "2026-03-15T00:25:35Z"}
 {"run": 9, "description": "skip space characters in span building", "metric_name": "frame_time_us", "metric_value": 10312, "baseline": 14971, "best_before": 9989, "status": "reverted", "commit": "84923f5", "timestamp": "2026-03-15T00:28:22Z"}
-{"run": 11, "description": "hoist cursor_info out of row loop", "metric_name": "frame_time_us", "metric_value": 10046, "baseline": 14971, "best_before": 9657, "status": "reverted", "commit": "fdf7f61", "timestamp": "2026-03-15T00:31:02Z"}
