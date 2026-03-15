@@ -243,9 +243,6 @@ pub fn build_span_buffers(
     let mut result = Vec::with_capacity(grid.rows * grid.cols / 2);
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
-        if row.iter().all(|c| c.is_empty()) {
-            continue;
-        }
         let has_hash = row.iter().any(|c| c.ch == '#');
         let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let abs_row = scrollback_len + row_idx;
