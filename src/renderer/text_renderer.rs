@@ -213,7 +213,7 @@ fn build_cell_span(
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_size(font_system, Some(buf_w), Some(cell_h));
     let attrs = Attrs::new().color(color).family(family);
-    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
+    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Basic);
     buffer.shape_until_scroll(font_system, false);
 
     let glyph_advance: f32 = buffer

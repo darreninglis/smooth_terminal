@@ -1,1 +1,2 @@
 {"run": 0, "description": "baseline", "metric_name": "frame_time_us", "metric_value": 14971, "baseline": 14971, "best_before": 14971, "status": "kept", "commit": "0dccfb2", "timestamp": "2026-03-15T00:08:32Z"}
+{"run": 1, "description": "avoid per-cell String allocation in build_cell_span", "metric_name": "frame_time_us", "metric_value": 15994, "baseline": 14971, "best_before": 14971, "status": "reverted", "commit": "e07d579", "timestamp": "2026-03-15T00:14:29Z"}
