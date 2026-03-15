@@ -9,3 +9,4 @@
 {"run": 17, "description": "apply row-level Buffer to scrollback spans", "metric_name": "frame_time_us", "metric_value": 1895, "baseline": 14971, "best_before": 2271, "status": "kept", "commit": "f2f87e3", "timestamp": "2026-03-15T00:45:21Z"}
 {"run": 18, "description": "reuse span Vecs, inline total_cols, hoist cursor_info", "metric_name": "frame_time_us", "metric_value": 1406, "baseline": 14971, "best_before": 1895, "status": "kept", "commit": "940dbaa", "timestamp": "2026-03-15T00:48:58Z"}
 {"run": 19, "description": "remove redundant shape_until_scroll", "metric_name": "frame_time_us", "metric_value": 1060, "baseline": 14971, "best_before": 1406, "status": "kept", "commit": "b5f7dd8", "timestamp": "2026-03-15T00:56:12Z"}
+{"run": 20, "description": "skip set_size before set_rich_text", "metric_name": "frame_time_us", "metric_value": 1035, "baseline": 14971, "best_before": 1060, "status": "kept", "commit": "f4faea9", "timestamp": "2026-03-15T00:58:14Z"}
