@@ -240,7 +240,7 @@ pub fn build_span_buffers(
     let metrics = Metrics::new(params.font_size, params.cell_h);
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let scrollback_len = grid.scrollback.len();
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(grid.rows * grid.cols / 2);
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
