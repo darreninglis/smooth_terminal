@@ -242,17 +242,19 @@ pub fn build_span_buffers(
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let scrollback_len = grid.scrollback.len();
     let mut result = Vec::with_capacity(grid.rows);
-    let default_attrs = Attrs::new().family(family);
+    let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
+    // Reuse allocations across rows
+    let mut spans: Vec<(String, Color)> = Vec::with_capacity(16);
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         let has_hash = row.iter().any(|c| c.ch == '#');
         let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let abs_row = scrollback_len + row_idx;
-        let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
         // Build spans of text with uniform color
-        let mut spans: Vec<(String, Color)> = Vec::new();
+        spans.clear();
         let mut first_col: Option<usize> = None;
+        let mut total_cols: usize = 0;
 
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
@@ -261,6 +263,8 @@ pub fn build_span_buffers(
             if first_col.is_none() {
                 first_col = Some(col_idx);
             }
+            let char_cols = cell.ch.width().unwrap_or(1).max(1);
+            total_cols += char_cols;
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
             let color = to_glyphon_color(raw_fg);
 
@@ -279,22 +283,17 @@ pub fn build_span_buffers(
             continue;
         }
         let col_start = first_col.unwrap_or(0);
-
-        // Total columns of text
-        let total_text: String = spans.iter().map(|(s, _)| s.as_str()).collect();
-        let total_cols: usize = total_text.chars().map(|c| c.width().unwrap_or(1).max(1)).sum();
         let buf_w = params.cell_w * (total_cols as f32 + 1.0);
 
         let mut buffer = Buffer::new(font_system, metrics);
         buffer.set_size(font_system, Some(buf_w), Some(params.cell_h));
 
         // Build rich text spans with per-color attributes
-        let mut rich_spans: Vec<(&str, Attrs)> = Vec::with_capacity(spans.len());
-        for (text, color) in &spans {
-            rich_spans.push((text.as_str(), Attrs::new().family(family).color(*color)));
-        }
+        let rich: Vec<(&str, Attrs)> = spans.iter()
+            .map(|(text, color)| (text.as_str(), Attrs::new().family(family).color(*color)))
+            .collect();
         let base = Attrs::new().family(family);
-        buffer.set_rich_text(font_system, rich_spans, &base, Shaping::Basic, None);
+        buffer.set_rich_text(font_system, rich, &base, Shaping::Basic, None);
         buffer.shape_until_scroll(font_system, false);
 
         result.push(SpanBuffer {
