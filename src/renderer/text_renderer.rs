@@ -293,8 +293,8 @@ pub fn build_span_buffers(
             .map(|(text, color)| (text.as_str(), Attrs::new().family(family).color(*color)))
             .collect();
         let base = Attrs::new().family(family);
+        // set_rich_text calls shape_until_scroll internally
         buffer.set_rich_text(font_system, rich, &base, Shaping::Basic, None);
-        buffer.shape_until_scroll(font_system, false);
 
         result.push(SpanBuffer {
             buffer,
@@ -371,8 +371,8 @@ pub fn build_scrollback_span_buffers(
             rich_spans.push((text.as_str(), Attrs::new().family(family).color(*color)));
         }
         let base = Attrs::new().family(family);
+        // set_rich_text calls shape_until_scroll internally
         buffer.set_rich_text(font_system, rich_spans, &base, Shaping::Basic, None);
-        buffer.shape_until_scroll(font_system, false);
 
         result.push(SpanBuffer {
             buffer,
