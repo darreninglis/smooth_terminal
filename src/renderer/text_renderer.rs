@@ -246,15 +246,15 @@ pub fn build_span_buffers(
         if row.iter().all(|c| c.is_empty()) {
             continue;
         }
-        let hex_overrides = detect_hex_colors(row);
         let abs_row = scrollback_len + row_idx;
         let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
+        let empty_hex: &[(usize, [f32; 4])] = &[];
 
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
                 continue;
             }
-            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
+            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, empty_hex, params, cursor_info, row_idx);
             let color = to_glyphon_color(raw_fg);
             result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
@@ -283,14 +283,14 @@ pub fn build_scrollback_span_buffers(
         }
         let abs_row = scrollback_start + i;
         let row_idx = abs_row as i64 - scrollback_total_len as i64;
-        let hex_overrides = detect_hex_colors(row);
         let cols = row.len();
+        let empty_hex: &[(usize, [f32; 4])] = &[];
 
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
                 continue;
             }
-            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
+            let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, empty_hex, params, None, 0);
             let color = to_glyphon_color(raw_fg);
             result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
