@@ -283,10 +283,8 @@ pub fn build_span_buffers(
             continue;
         }
         let col_start = first_col.unwrap_or(0);
-        let buf_w = params.cell_w * (total_cols as f32 + 1.0);
 
         let mut buffer = Buffer::new(font_system, metrics);
-        buffer.set_size(font_system, Some(buf_w), Some(params.cell_h));
 
         // Build rich text spans with per-color attributes
         let rich: Vec<(&str, Attrs)> = spans.iter()
@@ -360,12 +358,8 @@ pub fn build_scrollback_span_buffers(
             continue;
         }
         let col_start = first_col.unwrap_or(0);
-        let total_text: String = spans.iter().map(|(s, _)| s.as_str()).collect();
-        let total_cols: usize = total_text.chars().map(|c| c.width().unwrap_or(1).max(1)).sum();
-        let buf_w = params.cell_w * (total_cols as f32 + 1.0);
 
         let mut buffer = Buffer::new(font_system, metrics);
-        buffer.set_size(font_system, Some(buf_w), Some(params.cell_h));
         let mut rich_spans: Vec<(&str, Attrs)> = Vec::with_capacity(spans.len());
         for (text, color) in &spans {
             rich_spans.push((text.as_str(), Attrs::new().family(family).color(*color)));
