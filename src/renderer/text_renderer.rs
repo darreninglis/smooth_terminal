@@ -195,10 +195,6 @@ fn resolve_cell_fg(
     }
 }
 
-/// Cache of pre-shaped glyph x_offsets for ASCII characters.
-/// Avoids recomputing glyph advances for common characters.
-use std::collections::HashMap as StdHashMap;
-
 /// Build a SpanBuffer for a single cell. Returns None for empty/control chars.
 fn build_cell_span(
     font_system: &mut FontSystem,
@@ -210,7 +206,6 @@ fn build_cell_span(
     family: Family,
     cell_w: f32,
     cell_h: f32,
-    x_offset_cache: &mut StdHashMap<char, f32>,
 ) -> SpanBuffer {
     let char_cols = cell.ch.width().unwrap_or(1).max(1);
     let buf_w = cell_w * (char_cols as f32 + 1.0);
@@ -218,24 +213,16 @@ fn build_cell_span(
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_size(font_system, Some(buf_w), Some(cell_h));
     let attrs = Attrs::new().color(color).family(family);
-    let mut char_buf = [0u8; 4];
-    let char_str = cell.ch.encode_utf8(&mut char_buf);
-    buffer.set_text(font_system, char_str, &attrs, Shaping::Basic);
+    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Basic);
     buffer.shape_until_scroll(font_system, false);
 
-    let x_offset = if let Some(&cached) = x_offset_cache.get(&cell.ch) {
-        cached
-    } else {
-        let glyph_advance: f32 = buffer
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter())
-            .map(|g| g.w)
-            .sum();
-        let cell_span = cell_w * char_cols as f32;
-        let offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
-        x_offset_cache.insert(cell.ch, offset);
-        offset
-    };
+    let glyph_advance: f32 = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|g| g.w)
+        .sum();
+    let cell_span = cell_w * char_cols as f32;
+    let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
 
     SpanBuffer { buffer, col_start: col_idx, row_idx, x_offset }
 }
@@ -254,7 +241,6 @@ pub fn build_span_buffers(
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let scrollback_len = grid.scrollback.len();
     let mut result = Vec::new();
-    let mut x_offset_cache = StdHashMap::new();
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
@@ -270,7 +256,7 @@ pub fn build_span_buffers(
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
             let color = to_glyphon_color(raw_fg);
-            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h, &mut x_offset_cache));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result
@@ -290,7 +276,6 @@ pub fn build_scrollback_span_buffers(
     let metrics = Metrics::new(params.font_size, params.cell_h);
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let mut result = Vec::new();
-    let mut x_offset_cache = StdHashMap::new();
 
     for (i, row) in rows.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
@@ -307,7 +292,7 @@ pub fn build_scrollback_span_buffers(
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
             let color = to_glyphon_color(raw_fg);
-            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h, &mut x_offset_cache));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result
