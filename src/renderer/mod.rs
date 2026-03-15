@@ -316,7 +316,7 @@ impl Renderer {
         let cell_w = self.cell_w;
         let cell_h = self.cell_h;
         let font_size_px = self.font_size_px;
-        let font_family = self.app_config.font.family.clone();
+        let font_family = &self.app_config.font.family;
         let span_params = SpanBuildParams {
             cell_h,
             font_size: font_size_px,
