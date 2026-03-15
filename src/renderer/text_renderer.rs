@@ -249,7 +249,7 @@ pub fn build_span_buffers(
         let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
         for (col_idx, cell) in row.iter().enumerate() {
-            if cell.is_empty() || cell.ch.is_control() {
+            if cell.is_empty() || cell.ch.is_control() || cell.ch == ' ' {
                 continue;
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
@@ -286,7 +286,7 @@ pub fn build_scrollback_span_buffers(
         let cols = row.len();
 
         for (col_idx, cell) in row.iter().enumerate() {
-            if cell.is_empty() || cell.ch.is_control() {
+            if cell.is_empty() || cell.ch.is_control() || cell.ch == ' ' {
                 continue;
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
