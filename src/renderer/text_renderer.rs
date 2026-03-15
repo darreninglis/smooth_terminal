@@ -195,44 +195,41 @@ fn resolve_cell_fg(
     }
 }
 
-/// Build a SpanBuffer for a run of text (one or more characters with the same color).
-fn build_run_span(
+/// Build a SpanBuffer for a single cell. Returns None for empty/control chars.
+fn build_cell_span(
     font_system: &mut FontSystem,
-    text: &str,
-    col_start: usize,
+    cell: &crate::terminal::cell::Cell,
+    col_idx: usize,
     row_idx: i32,
     color: Color,
     metrics: Metrics,
     family: Family,
     cell_w: f32,
     cell_h: f32,
-    num_cols: usize,
 ) -> SpanBuffer {
-    let buf_w = cell_w * (num_cols as f32 + 1.0);
+    let char_cols = cell.ch.width().unwrap_or(1).max(1);
+    let buf_w = cell_w * (char_cols as f32 + 1.0);
 
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_size(font_system, Some(buf_w), Some(cell_h));
     let attrs = Attrs::new().color(color).family(family);
-    buffer.set_text(font_system, text, &attrs, Shaping::Basic);
+    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Basic);
     buffer.shape_until_scroll(font_system, false);
 
-    // For single-char spans, center the glyph; for multi-char, use 0 offset
-    let x_offset = if num_cols == 1 {
-        let glyph_advance: f32 = buffer
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter())
-            .map(|g| g.w)
-            .sum();
-        ((cell_w - glyph_advance) / 2.0).max(0.0)
-    } else {
-        0.0
-    };
+    let glyph_advance: f32 = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|g| g.w)
+        .sum();
+    let cell_span = cell_w * char_cols as f32;
+    let x_offset = ((cell_span - glyph_advance) / 2.0).max(0.0);
 
-    SpanBuffer { buffer, col_start, row_idx, x_offset }
+    SpanBuffer { buffer, col_start: col_idx, row_idx, x_offset }
 }
 
-/// Build glyphon Buffers for visible terminal grid rows, batching consecutive
-/// cells with the same color into single multi-character Buffers.
+/// Build per-cell glyphon Buffers for visible terminal grid rows.
+/// Each cell gets its own Buffer placed at exactly `col * cell_w` to keep
+/// the cursor pixel-aligned with rendered glyphs.
 pub fn build_span_buffers(
     font_system: &mut FontSystem,
     grid: &crate::terminal::grid::TerminalGrid,
@@ -243,7 +240,7 @@ pub fn build_span_buffers(
     let metrics = Metrics::new(params.font_size, params.cell_h);
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
     let scrollback_len = grid.scrollback.len();
-    let mut result = Vec::with_capacity(grid.rows * 4);
+    let mut result = Vec::with_capacity(grid.rows * grid.cols / 2);
 
     for (row_idx, row) in grid.cells.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
@@ -253,45 +250,13 @@ pub fn build_span_buffers(
         let abs_row = scrollback_len + row_idx;
         let cursor_info = cursor_pos.map(|(r, c)| (r, c, cursor_text_color));
 
-        // Batch consecutive cells with the same color into runs
-        let mut run_start: Option<usize> = None;
-        let mut run_color = Color::rgba(0, 0, 0, 0);
-        let mut run_text = String::new();
-        let mut run_cols: usize = 0;
-
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
-                // Flush current run
-                if let Some(start) = run_start.take() {
-                    result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
-                    run_text.clear();
-                    run_cols = 0;
-                }
                 continue;
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, grid.cols, &hex_overrides, params, cursor_info, row_idx);
             let color = to_glyphon_color(raw_fg);
-
-            if run_start.is_some() && color == run_color {
-                // Continue the run
-                run_text.push(cell.ch);
-                run_cols += cell.ch.width().unwrap_or(1).max(1);
-            } else {
-                // Flush previous run and start a new one
-                if let Some(start) = run_start.take() {
-                    result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
-                    run_text.clear();
-                    run_cols = 0;
-                }
-                run_start = Some(col_idx);
-                run_color = color;
-                run_text.push(cell.ch);
-                run_cols = cell.ch.width().unwrap_or(1).max(1);
-            }
-        }
-        // Flush last run
-        if let Some(start) = run_start {
-            result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result
@@ -310,7 +275,7 @@ pub fn build_scrollback_span_buffers(
 ) -> Vec<SpanBuffer> {
     let metrics = Metrics::new(params.font_size, params.cell_h);
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
-    let mut result = Vec::with_capacity(rows.len() * 4);
+    let mut result = Vec::new();
 
     for (i, row) in rows.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
@@ -321,40 +286,13 @@ pub fn build_scrollback_span_buffers(
         let hex_overrides = detect_hex_colors(row);
         let cols = row.len();
 
-        let mut run_start: Option<usize> = None;
-        let mut run_color = Color::rgba(0, 0, 0, 0);
-        let mut run_text = String::new();
-        let mut run_cols: usize = 0;
-
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
-                if let Some(start) = run_start.take() {
-                    result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
-                    run_text.clear();
-                    run_cols = 0;
-                }
                 continue;
             }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
             let color = to_glyphon_color(raw_fg);
-
-            if run_start.is_some() && color == run_color {
-                run_text.push(cell.ch);
-                run_cols += cell.ch.width().unwrap_or(1).max(1);
-            } else {
-                if let Some(start) = run_start.take() {
-                    result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
-                    run_text.clear();
-                    run_cols = 0;
-                }
-                run_start = Some(col_idx);
-                run_color = color;
-                run_text.push(cell.ch);
-                run_cols = cell.ch.width().unwrap_or(1).max(1);
-            }
-        }
-        if let Some(start) = run_start {
-            result.push(build_run_span(font_system, &run_text, start, row_idx as i32, run_color, metrics, family, params.cell_w, params.cell_h, run_cols));
+            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
         }
     }
     result
