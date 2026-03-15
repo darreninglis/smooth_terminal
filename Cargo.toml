@@ -1,6 +1,6 @@
 [package]
 name = "smooth_terminal"
-version = "0.1.196"
+version = "0.1.186"
 edition = "2021"
 
 [[bin]]
