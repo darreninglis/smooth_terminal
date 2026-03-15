@@ -210,6 +210,12 @@ impl Renderer {
         }
     }
 
+    /// Switch to non-vsync present mode for benchmarking.
+    pub fn disable_vsync(&mut self) {
+        self.config.present_mode = wgpu::PresentMode::AutoNoVsync;
+        self.surface.configure(&self.device, &self.config);
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;

@@ -49,6 +49,12 @@ impl Terminal {
         self.pty.write_bytes(data)
     }
 
+    /// Feed raw bytes directly through the VTE parser (bypasses PTY).
+    /// Used for benchmarking with synthetic content.
+    pub fn feed_bytes(&mut self, data: &[u8]) {
+        self.parser.advance(&mut self.performer, data);
+    }
+
     pub fn resize(&mut self, cols: usize, rows: usize) -> Result<()> {
         self.grid.lock().resize(cols, rows);
         self.pty.resize(cols as u16, rows as u16)?;

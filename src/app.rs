@@ -261,6 +261,18 @@ pub struct App {
     // Retained NSEvent monitor for double-click tab renaming (macOS only).
     #[cfg(target_os = "macos")]
     _event_monitor: Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
+    /// When true, run a rendering benchmark and exit.
+    pub benchmark_mode: bool,
+    /// Frame times collected during benchmark (microseconds).
+    benchmark_frame_times: Vec<u64>,
+    /// Whether synthetic content has been injected for the benchmark.
+    benchmark_content_injected: bool,
+    /// Total benchmark frames to render (after warmup).
+    benchmark_total_frames: usize,
+    /// Number of warmup frames to skip before recording.
+    benchmark_warmup_frames: usize,
+    /// Total frames rendered (including warmup).
+    benchmark_frames_rendered: usize,
 }
 
 impl App {
@@ -272,7 +284,63 @@ impl App {
             pending_close: Vec::new(),
             #[cfg(target_os = "macos")]
             _event_monitor: None,
+            benchmark_mode: false,
+            benchmark_frame_times: Vec::new(),
+            benchmark_content_injected: false,
+            benchmark_total_frames: 300,
+            benchmark_warmup_frames: 30,
+            benchmark_frames_rendered: 0,
         }
+    }
+
+    /// Generate synthetic terminal content with colors and varying text
+    /// to stress the rendering pipeline.
+    fn generate_benchmark_content(cols: usize, rows: usize, variant: u8) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(cols * rows * 20);
+        // Move cursor home
+        buf.extend_from_slice(b"\x1b[H");
+        let colors = [31, 32, 33, 34, 35, 36, 37, 91, 92, 93, 94, 95, 96, 97];
+        for row in 0..rows {
+            let color = colors[(row + variant as usize) % colors.len()];
+            buf.extend_from_slice(format!("\x1b[{}m", color).as_bytes());
+            // Bold on odd rows
+            if row % 2 == 1 {
+                buf.extend_from_slice(b"\x1b[1m");
+            }
+            for col in 0..cols {
+                let ch = ((33 + (row * 7 + col * 3 + variant as usize) % 94) as u8) as char;
+                buf.push(ch as u8);
+            }
+            buf.extend_from_slice(b"\x1b[0m");
+            if row < rows - 1 {
+                buf.extend_from_slice(b"\r\n");
+            }
+        }
+        buf
+    }
+
+    fn finish_benchmark(&self) {
+        let times = &self.benchmark_frame_times;
+        if times.is_empty() {
+            eprintln!("No benchmark frames recorded.");
+            return;
+        }
+        let mut sorted = times.clone();
+        sorted.sort();
+        let len = sorted.len();
+        let avg = sorted.iter().sum::<u64>() / len as u64;
+        let p50 = sorted[len / 2];
+        let p95 = sorted[(len as f64 * 0.95) as usize];
+        let p99 = sorted[(len as f64 * 0.99) as usize];
+        let min = sorted[0];
+        let max = sorted[len - 1];
+
+        eprintln!("--- Benchmark Results ({} frames) ---", len);
+        eprintln!("  avg: {}us", avg);
+        eprintln!("  p50: {}us  p95: {}us  p99: {}us", p50, p95, p99);
+        eprintln!("  min: {}us  max: {}us", min, max);
+        // Machine-readable output for autoresearch
+        println!("METRIC frame_time_us={}", avg);
     }
 
     fn apply_config_to_all_windows(&mut self) {
@@ -814,6 +882,13 @@ impl ApplicationHandler for App {
 
         self.first_window_id = Some(window_id);
         self.windows.insert(window_id, state);
+
+        // Benchmark: disable vsync so we measure actual render time, not vsync wait
+        if self.benchmark_mode {
+            if let Some(state) = self.windows.get_mut(&window_id) {
+                state.renderer.disable_vsync();
+            }
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -1320,7 +1395,31 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                let now = Instant::now();
+                let frame_start = Instant::now();
+
+                // Benchmark: inject synthetic content and check frame count
+                if self.benchmark_mode {
+                    if let Some(state) = self.windows.get_mut(&window_id) {
+                        // Inject varying content each frame to invalidate text cache
+                        let frame_num = self.benchmark_frame_times.len() as u8;
+                        if let Some(pane) = state.pane_tree.focused_pane_mut() {
+                            let grid = pane.terminal.grid.lock();
+                            let cols = grid.cols;
+                            let rows = grid.rows;
+                            drop(grid);
+                            let content = Self::generate_benchmark_content(cols, rows, frame_num);
+                            pane.terminal.feed_bytes(&content);
+                        }
+                    }
+                    // Check if we've finished all frames
+                    if self.benchmark_frame_times.len() >= self.benchmark_total_frames {
+                        self.finish_benchmark();
+                        event_loop.exit();
+                        return;
+                    }
+                }
+
+                let now = frame_start;
 
                 // Open config in pane if requested via menu item (only for first window)
                 let open_config = OPEN_CONFIG_REQUESTED.swap(false, Ordering::Relaxed);
@@ -1454,6 +1553,15 @@ impl ApplicationHandler for App {
                         }
                         Err(e) => {
                             log::warn!("Surface error: {:?}", e);
+                        }
+                    }
+
+                    // Record frame time for benchmark (skip warmup frames)
+                    if self.benchmark_mode {
+                        self.benchmark_frames_rendered += 1;
+                        if self.benchmark_frames_rendered > self.benchmark_warmup_frames {
+                            let elapsed = frame_start.elapsed().as_micros() as u64;
+                            self.benchmark_frame_times.push(elapsed);
                         }
                     }
                 }
