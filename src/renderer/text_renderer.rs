@@ -320,7 +320,7 @@ pub fn build_scrollback_span_buffers(
 ) -> Vec<SpanBuffer> {
     let metrics = Metrics::new(params.font_size, params.cell_h);
     let family = if params.font_family.is_empty() { Family::Monospace } else { Family::Name(params.font_family) };
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(rows.len());
 
     for (i, row) in rows.iter().enumerate() {
         if row.iter().all(|c| c.is_empty()) {
@@ -332,14 +332,55 @@ pub fn build_scrollback_span_buffers(
         let hex_overrides = if has_hash { detect_hex_colors(row) } else { Vec::new() };
         let cols = row.len();
 
+        // Build per-row rich text spans
+        let mut spans: Vec<(String, Color)> = Vec::new();
+        let mut first_col: Option<usize> = None;
+
         for (col_idx, cell) in row.iter().enumerate() {
             if cell.is_empty() || cell.ch.is_control() {
                 continue;
             }
+            if first_col.is_none() {
+                first_col = Some(col_idx);
+            }
             let raw_fg = resolve_cell_fg(cell, col_idx, abs_row, cols, &hex_overrides, params, None, 0);
             let color = to_glyphon_color(raw_fg);
-            result.push(build_cell_span(font_system, cell, col_idx, row_idx as i32, color, metrics, family, params.cell_w, params.cell_h));
+
+            if let Some(last) = spans.last_mut() {
+                if last.1 == color {
+                    last.0.push(cell.ch);
+                    continue;
+                }
+            }
+            let mut s = String::new();
+            s.push(cell.ch);
+            spans.push((s, color));
         }
+
+        if spans.is_empty() {
+            continue;
+        }
+        let col_start = first_col.unwrap_or(0);
+        let total_text: String = spans.iter().map(|(s, _)| s.as_str()).collect();
+        let total_cols: usize = total_text.chars().map(|c| c.width().unwrap_or(1).max(1)).sum();
+        let buf_w = params.cell_w * (total_cols as f32 + 1.0);
+
+        let mut buffer = Buffer::new(font_system, metrics);
+        buffer.set_size(font_system, Some(buf_w), Some(params.cell_h));
+        let mut rich_spans: Vec<(&str, Attrs)> = Vec::with_capacity(spans.len());
+        for (text, color) in &spans {
+            rich_spans.push((text.as_str(), Attrs::new().family(family).color(*color)));
+        }
+        let base = Attrs::new().family(family);
+        buffer.set_rich_text(font_system, rich_spans, &base, Shaping::Basic, None);
+        buffer.shape_until_scroll(font_system, false);
+
+        result.push(SpanBuffer {
+            buffer,
+            col_start,
+            row_idx: row_idx as i32,
+            x_offset: 0.0,
+        });
     }
     result
 }
