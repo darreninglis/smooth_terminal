@@ -66,7 +66,9 @@ pub fn detect_urls(row: &[Cell]) -> Vec<(usize, usize, String)> {
             4 // www.
         }..];
 
-        if after_scheme.contains('.') && after_scheme.len() > 1 {
+        let has_dot = after_scheme.contains('.');
+        let has_port = after_scheme.contains(':');
+        if (has_dot || has_port) && after_scheme.len() > 1 {
             let full_url = if added_scheme.is_empty() {
                 url_text
             } else {
@@ -168,10 +170,23 @@ mod tests {
     }
 
     #[test]
-    fn must_have_dot_after_scheme() {
+    fn must_have_dot_or_port_after_scheme() {
+        // No dot and no port → rejected
         let row = make_row("https://localhost/path");
         let urls = detect_urls(&row);
         assert!(urls.is_empty());
+
+        // Port present → accepted
+        let row = make_row("http://localhost:8000");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].2, "http://localhost:8000");
+
+        // Port with path → accepted
+        let row = make_row("http://localhost:3000/api/v1");
+        let urls = detect_urls(&row);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].2, "http://localhost:3000/api/v1");
     }
 
     #[test]
