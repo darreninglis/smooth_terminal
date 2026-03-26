@@ -105,6 +105,7 @@ impl PtyHandle {
                         if sender.send(data).is_err() {
                             break;
                         }
+                        crate::app::wake_event_loop();
                     }
                     Err(_) => break,
                 }

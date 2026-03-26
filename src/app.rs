@@ -8,14 +8,35 @@ use crate::terminal::url::detect_urls;
 use crossbeam_channel::Receiver;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowAttributes, WindowId};
+
+/// Global event-loop proxy so PTY reader threads can wake the event loop
+/// without needing to thread the proxy through every constructor.
+static EVENT_LOOP_PROXY: OnceLock<EventLoopProxy<()>> = OnceLock::new();
+
+/// Set to `true` by PTY reader threads when new data arrives.
+/// Cleared after the data is drained in `RedrawRequested`.
+pub static PTY_DATA_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Initialize the event-loop proxy. Must be called before `run_app`.
+pub fn init_event_loop_proxy(proxy: EventLoopProxy<()>) {
+    let _ = EVENT_LOOP_PROXY.set(proxy);
+}
+
+/// Wake the event loop from a PTY reader thread.
+pub fn wake_event_loop() {
+    PTY_DATA_PENDING.store(true, Ordering::Release);
+    if let Some(proxy) = EVENT_LOOP_PROXY.get() {
+        let _ = proxy.send_event(());
+    }
+}
 
 // ---------------------------------------------------------------------------
 // macOS geometry types used for window tiling and tab-bar hit-testing.
@@ -401,6 +422,9 @@ impl App {
                         && event.paths.iter().any(|p| p == &watch_path)
                     {
                         let _ = tx.try_send(());
+                        // Wake the event loop so it picks up the config change
+                        // even when idle (ControlFlow::Wait).
+                        wake_event_loop();
                     }
                 }
             })
@@ -902,13 +926,29 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let fps = self.config.animation.target_fps.max(1) as u64;
-        let frame_interval = std::time::Duration::from_millis(1000 / fps);
-        let now = Instant::now();
-        for state in self.windows.values() {
-            if now.duration_since(state.last_frame) >= frame_interval {
-                state.window.request_redraw();
+        let pty_pending = PTY_DATA_PENDING.load(Ordering::Acquire);
+        let animations_active = self.windows.values().any(|s| !s.renderer.animations_settled());
+        let needs_frame = pty_pending || animations_active || self.benchmark_mode;
+
+        if needs_frame {
+            let fps = self.config.animation.target_fps.max(1) as u64;
+            let frame_interval = std::time::Duration::from_millis(1000 / fps);
+            let now = Instant::now();
+            let mut next_deadline = now + frame_interval;
+            for state in self.windows.values() {
+                let elapsed = now.duration_since(state.last_frame);
+                if elapsed >= frame_interval {
+                    state.window.request_redraw();
+                } else {
+                    // Schedule wake for when this window's frame is due
+                    let remaining = frame_interval - elapsed;
+                    next_deadline = next_deadline.min(now + remaining);
+                }
             }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
+        } else {
+            // Nothing happening — sleep until next input event or PTY wake.
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 
@@ -1465,6 +1505,7 @@ impl ApplicationHandler for App {
 
                     // Drain PTY output
                     state.pane_tree.drain_all_pty_output();
+                    PTY_DATA_PENDING.store(false, Ordering::Release);
 
                     // Window title is always "Smooth Terminal vX.Y.Z" — tab title shows cwd.
                     #[cfg(target_os = "macos")]

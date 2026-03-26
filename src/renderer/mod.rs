@@ -240,6 +240,13 @@ impl Renderer {
         });
     }
 
+    /// Returns true when all cursor and scroll springs have settled (no motion).
+    pub fn animations_settled(&self) -> bool {
+        self.cursor_animators.values().all(|a| {
+            a.corners.iter().all(|c| c.is_settled(0.5))
+        }) && self.scroll_springs.values().all(|s| s.is_settled())
+    }
+
     pub fn tick_animations(&mut self, dt: f32) {
         for anim in self.cursor_animators.values_mut() {
             anim.tick(dt);

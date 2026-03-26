@@ -9,7 +9,7 @@ mod terminal;
 
 use app::App;
 use config::Config;
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::EventLoop;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -19,7 +19,7 @@ fn main() {
     let config = Config::load_or_default();
 
     let event_loop = EventLoop::new().expect("create event loop");
-    event_loop.set_control_flow(ControlFlow::Poll);
+    app::init_event_loop_proxy(event_loop.create_proxy());
 
     let mut app = App::new(config);
     app.benchmark_mode = benchmark;
