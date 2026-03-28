@@ -1080,6 +1080,7 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let rects = state.pane_tree.layout.compute_rects(rect);
                             state.pane_tree.focus_direction(&rects, Direction::Left);
+                            state.window.request_redraw();
                         }
                     }
                     InputAction::FocusRight => {
@@ -1087,6 +1088,7 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let rects = state.pane_tree.layout.compute_rects(rect);
                             state.pane_tree.focus_direction(&rects, Direction::Right);
+                            state.window.request_redraw();
                         }
                     }
                     InputAction::FocusUp => {
@@ -1094,6 +1096,7 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let rects = state.pane_tree.layout.compute_rects(rect);
                             state.pane_tree.focus_direction(&rects, Direction::Up);
+                            state.window.request_redraw();
                         }
                     }
                     InputAction::FocusDown => {
@@ -1101,6 +1104,7 @@ impl ApplicationHandler for App {
                             let rect = state.content_rect(&self.config);
                             let rects = state.pane_tree.layout.compute_rects(rect);
                             state.pane_tree.focus_direction(&rects, Direction::Down);
+                            state.window.request_redraw();
                         }
                     }
                     InputAction::OpenConfig => {

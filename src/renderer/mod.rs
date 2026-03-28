@@ -710,6 +710,20 @@ impl Renderer {
                     // visibly lags behind typed text during fast input.
                     anim.clamp_lag(self.cell_w, self.cell_h);
                 }
+            } else {
+                // Col/row unchanged but the cursor may be rendered far from the
+                // target (e.g. after switching focus to a different pane whose
+                // pane_rect origin differs).  Snap if the rendered position is
+                // far from where it should be.
+                let rendered_x = anim.corners[0].x.position;
+                let rendered_y = anim.corners[0].y.position;
+                let expected_x = pane_rect.x + col as f32 * self.cell_w;
+                let expected_y = pane_rect.y + row as f32 * self.cell_h + scroll_offset;
+                let dx = (rendered_x - expected_x).abs();
+                let dy = (rendered_y - expected_y).abs();
+                if dx > self.cell_w * 1.5 || dy > self.cell_h * 1.5 {
+                    anim.snap_to(col, row, pane_rect.x, pane_rect.y, scroll_offset);
+                }
             }
         }
     }
