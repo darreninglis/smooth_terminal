@@ -213,7 +213,7 @@ fn build_cell_span(
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_size(font_system, Some(buf_w), Some(cell_h));
     let attrs = Attrs::new().color(color).family(family);
-    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Basic);
+    buffer.set_text(font_system, &cell.ch.to_string(), &attrs, Shaping::Advanced);
     buffer.shape_until_scroll(font_system, false);
 
     let glyph_advance: f32 = buffer
@@ -289,7 +289,7 @@ pub fn build_span_buffers(
             .map(|(text, color)| (text.as_str(), Attrs::new().family(family).color(*color)))
             .collect();
         let base = Attrs::new().family(family);
-        buffer.set_rich_text(font_system, rich, &base, Shaping::Basic, None);
+        buffer.set_rich_text(font_system, rich, &base, Shaping::Advanced, None);
 
         result.push(SpanBuffer {
             buffer,
@@ -360,7 +360,7 @@ pub fn build_scrollback_span_buffers(
             rich_spans.push((text.as_str(), Attrs::new().family(family).color(*color)));
         }
         let base = Attrs::new().family(family);
-        buffer.set_rich_text(font_system, rich_spans, &base, Shaping::Basic, None);
+        buffer.set_rich_text(font_system, rich_spans, &base, Shaping::Advanced, None);
 
         result.push(SpanBuffer {
             buffer,
